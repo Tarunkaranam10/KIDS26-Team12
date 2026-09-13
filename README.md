@@ -1,39 +1,42 @@
-# Biohackathon Project Template
+# KIDS26 Biohackathon Project Plan
 
-This repository is a starting point for a three-day team project. This repository is populated with a starting template for team organization and planning. Use it to plan, build, and document work. Please adjust this repository to suit the needs of your team.
+This repository contains Team 12's three-day biohackathon project: a reproducible test of whether DNA methylation can predict independently measured homologous recombination deficiency genomic-scar burden across cancer types and transfer to pediatric high-grade glioma.
 
-> **Team leads:** Start with the [team lead checklist](project-management/CHECKLIST.md) before the event or during your first team meeting.
+> **Team leads:** Start with the [team lead checklist](project-management/CHECKLIST.md) before the event or during the first team meeting.
 
 ## Project Profile
 
-- **Project name:** [Add a short, descriptive name]
-- **Question, problem, or opportunity:** [What are you exploring?]
-- **Data, inputs, or evidence:** [What will you use, and where does it come from?]
-- **Expected output:** [What will you show, test, explain, or demonstrate?]
-- **Tools and stack:** [Languages, libraries, notebooks, APIs, databases, services, or other tools]
-- **Team lead:** [Name and GitHub handle]
-- **Team members and roles:** [Link to `project-management/team.md`]
-- **Communication:** [Add the agreed channel or contact]
+- **Project name:** KIDS26 Methyl-HRD: Cross-cancer prediction of genomic-scar burden
+- **Question, problem, or opportunity:** Can a leakage-safe model trained on adult TCGA 450K methylation predict continuous, independently measured reference HRDsum in cancer types it has not seen and then transfer, without refitting, to eligible PBTP pediatric high-grade glioma samples?
+- **Data, inputs, or evidence:** Public TCGA/PanCanAtlas 450K methylation, PanImmune HRD-LOH/LST/TAI/HRDsum labels, subtype/QC/purity/ploidy metadata, versioned HM450/EPIC-v1 annotations, 60 locally reviewed papers, and approved de-identified PBTP methylation plus allele-aware genomic reference labels if available.
+- **Expected output:** An auditable TCGA cohort, frozen 450K/EPIC feature bridge, nested cancer-aware elastic-net baseline, held-out-cancer and null-comparator results, uncertainty/OOD reporting, and a Shiny demonstration using public, synthetic, or approved de-identified precomputed results.
+- **Tools and stack:** R 4.5.0 or Python 3.10+ for acquisition, matching, QC, and reproducibility; R with `glmnet`, `data.table`, `jsonlite`, and `renv` for modeling; Bioconductor/minfi and conumee2 only for the gated intensity/CNV branch; Shiny for presentation; Git/GitHub for collaboration; Slack for team communication.
+- **Team leads:** [Evan Savage (@esavage111)](https://github.com/esavage111) and [Susanna Downing (@sdowning12)](https://github.com/sdowning12)
+- **Team members and roles:** [Team and roles](project-management/team.md)
+- **Communication:** [Team 12 Slack channel](https://stjudebiohackathon.slack.com/archives/C0BSC28M3U6); [Biohackathon general channel](https://stjudebiohackathon.slack.com/archives/C04JD4M3TCM)
 
-Naming the tools and stack early helps the team lead create useful roles and divide work realistically. It is fine to revise this section as the project develops.
+The stack and roles may be narrowed during the event. Optional methods cannot displace the auditable real-data baseline and unseen-cancer validation.
 
 ## Vision and Mission
 
-- **Vision:** [Describe the change, insight, or capability you hope this project supports.]
-- **Mission:** [Describe what the team will do during the biohackathon to move toward that vision.]
+- **Vision:** Enable a scientifically defensible, single-sample methylation assay to estimate genomic-scar burden in pediatric tumors while exposing uncertainty, domain shift, and the limits of methylation-derived copy-number information.
+- **Mission:** During the biohackathon, construct and freeze the public TCGA training cohort and feature bridge, fit a leakage-safe elastic-net model, test cross-cancer generalization against null comparators, and demonstrate approved precomputed results without making unsupported clinical or treatment claims.
 
 ## About
 
-[Add a short explanation of the motivation, background, and why the question or problem matters.]
+Homologous recombination deficiency can leave persistent genomic scars associated with DNA-repair defects and treatment sensitivity. Canonical HRDsum combines HRD-LOH, large-scale state transitions, and telomeric allelic imbalance measured from allele-aware genomic data. Methylation arrays provide rich CpG profiles and can support total-copy-number inference from raw intensities, but ordinary total CN cannot identify copy-neutral LOH or prove telomeric allelic imbalance.
+
+Team 12 therefore treats methylation as a predictor of an independently measured continuous reference HRDsum. The primary experiment uses shared HM450/EPIC CpGs and elastic-net regression. Cancer-type-held-out validation tests whether performance reflects transferable HRD biology rather than tissue identity. Total-CN features and fusion are secondary gated comparisons; synthetic augmentation remains a stretch experiment after the real-data result is stable.
+
+This is a research prototype. It is not a clinical HRD assay, functional repair test, or treatment recommendation.
 
 ## Roadmap and Milestones
 
 | When | Focus | Expected outcome |
-| --- | --- | --- |
-| Day 1 | Agree on the question, inputs, stack, roles, and first tasks | A shared plan and a first small change in the repository |
-| Day 2 | Build, test, and compare approaches | A working result or clear evidence about what does not work |
-| Day 3 | Stabilize, document, and present | A demo or handoff with methods, limitations, and next steps |
+|---|---|---|
+| Day 1 | Verify downloaded inputs; freeze the sample audit, 450K/EPIC bridge, roles, and analysis protocol; run R smoke tests and the first real elastic-net/null comparison | An auditable eligible cohort and at least one reproducible cancer-held-out result by early Day 2 |
+| Day 2 | Complete development leave-one-cancer-type-out evaluation, select and freeze the model, then apply it to locked CNS and eligible PBTP data; gate CNV/fusion | A working transfer result or clear evidence that the hypothesized transfer does not hold |
+| Day 3 | Finish uncertainty/OOD and interpretation by noon; stabilize figures, Shiny demo, documentation, presentation, and rehearsal | A reproducible demonstration or negative result with methods, limitations, provenance, and next steps |
 
-The goal is not a perfect production system. The goal is a clear, honest, useful result that the team can explain and others can build on.
-
+The goal is a clear, honest, useful result that the team can explain and others can build on. Optional modeling stops before it threatens the primary result or the second half of Day 3.
 
