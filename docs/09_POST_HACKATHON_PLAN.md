@@ -1,0 +1,14 @@
+# Post-hackathon research program
+
+1. Audit full supplementary methods and missing literature, especially Chen regression details, the 2026 Epi-HRD score, conumee2 settings and original PanImmune label provenance. Archive verified software commits/parameter sets. Do not fill gaps from earlier ChatGPT prose.
+2. Obtain paired WGS/allelic CN, raw EPIC and independent purity on **the same pediatric patient tumors**, with lineage IDs. This is the highest information-gain dataset: it separates biological transfer failure, platform shift, reference-label error and model-lineage effects simultaneously.
+3. Benchmark paired 450K/EPIC versions and processing bridges with fixed references; technical replicates and dilution series distinguish assay noise from biology. Include low-purity and low-instability controls, not only high-HRD selected examples.
+4. Expand PBTP and a genuinely independent pediatric cohort; pre-register donor-level exclusions and frozen test analysis. If adapting to pediatric data, reserve an independent cohort rather than reusing the original validation set for claims.
+5. Compare target callers/assays on matched samples using component-wise agreement and ploidy/purity strata. Add WGS HRDetect/CHORD and functional RAD51 evidence; distinguish ongoing HR dysfunction from historical scars.
+6. Perform the explicit SNP/color-channel LOH experiment. Establish informative-locus coverage, matched-normal dependence, accuracy in copy-neutral LOH and telomeric regions. A negative result prevents an invalid canonical calculator.
+7. Benchmark RNA, nonlinear models, component prediction, regional methylation, VAE/conditional VAE/GAN/diffusion only against strong real-only baselines under fixed donor/cancer holdouts. Record compute and sample efficiency.
+8. Calibrate uncertainty and abstention on realistic external domains; investigate negative R2, subgroup drift, bias with treatment/passage, and outcome variance limits. Passing OOD is not sufficient evidence of calibrated risk.
+9. Package as an R library/CLI with schemas, model cards and versioned artifacts; produce a tested renv lockfile and then a container if it improves deployment. Add reproducibility CI without protected data. Sign/hash model releases and prevent silent preprocessing updates.
+10. Prospectively evaluate research predictions before considering clinical use. Potential manuscript: methylation prediction of genomic-scar burden, limits of total-CN allelic recovery, adult-to-pediatric transfer, and lineage-dependent epigenetic/scar discordance. Do not title it a validated HRD therapy selector without supporting evidence.
+
+Biological opportunities: HRD-like scars without canonical HRR defects; methylation/HRD dissociation by H3/IDH subtype; promoter dosage effects; divergence between patient tumor and models; instability patterns driven by mechanisms other than HRD. These are hypotheses, not findings from the current setup.
