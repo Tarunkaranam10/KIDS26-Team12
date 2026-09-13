@@ -1,1 +1,4 @@
-Meeting Notes: [INSERT LINK]
+Meeting notes and decisions are coordinated in the Team 12 Slack channel:
+https://stjudebiohackathon.slack.com/archives/C0BSC28M3U6
+
+Use project-management/check-in.md for durable repository status notes. Record decisions that change endpoints, partitions, data eligibility, model selection, or public claims in CHANGELOG.md.

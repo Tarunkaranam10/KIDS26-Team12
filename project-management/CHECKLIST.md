@@ -110,12 +110,12 @@ For details, please visit: https://issuu.com/sjcrh/docs/st._jude_code_of_conduct
 
 Use this space for the material that helps someone understand the project after the event.
 
-- **Final demo or report:** [Add a link]
-- **Main result:** [Summarize what the team built or learned]
-- **How to reproduce or run it:** [Link to the relevant instructions]
-- **Data and source notes:** [Link to provenance, citations, and licenses]
-- **Known limitations:** [What should a reader be careful about?]
-- **Next steps:** [What would be worth doing next?]
+- **Final demo or report:** The precomputed [Shiny app](../app/app.R) and final figures/results will be linked here during Day 3; current handoff status is in [verification status](../docs/14_VERIFICATION_STATUS.md).
+- **Main result:** Pending biological fitting. The completed pre-event result is an auditable cohort/feature/model plan with a 7,707-candidate metadata cohort, 384,640-probe HM450/EPIC-v1 bridge, and leakage-safe elastic-net implementation.
+- **How to reproduce or run it:** [Technical README](../README.md), [data acquisition guide](../docs/03_DATA_ACQUISITION.md), and [three-day runbook](../docs/05_THREE_DAY_HACKATHON_RUNBOOK.md).
+- **Data and source notes:** [Acquisition provenance](../docs/03_DATA_ACQUISITION.md), [literature evidence](../docs/01_LITERATURE_EVIDENCE.md), and [feature-bridge provenance](../docs/17_450K_EPIC_FEATURE_BRIDGE.md).
+- **Known limitations:** No biological model has yet been trained; the full historical matrix path/checksum and R runtime remain to be verified; canonical LOH/TAI cannot be calculated from ordinary methylation total CN; PBTP use requires the internal readiness gate.
+- **Next steps:** Verify the reported full data download, run R smoke tests, extract the frozen feature matrix, fit the real-data baseline/null, and freeze before locked CNS/PBTP evaluation.
 
 Keep generated figures and reports clearly named. Do not commit sensitive data or files that cannot be redistributed.
 
@@ -123,12 +123,12 @@ Keep generated figures and reports clearly named. Do not commit sensitive data o
 
 Keep communication easy to find and easy to use during the three-day event.
 
-- **Primary channel:** [Add the team channel or meeting link]
-- **Slack team channel:** [Add the team slack channel]
-- **Team lead:** [Add name and GitHub handle]
-- **Mentor or support contact:** [Add contact]
-- **Check-in time:** [Add a recurring time or agree in the team plan]
-- **Slack general channel:** [Use this general channel for communication to all teams](https://stjudebiohackathon.slack.com/archives/C04JD4M3TCM)
+- **Primary channel:** [Team 12 Slack](https://stjudebiohackathon.slack.com/archives/C0BSC28M3U6)
+- **Slack team channel:** [Team 12 Slack](https://stjudebiohackathon.slack.com/archives/C0BSC28M3U6)
+- **Team leads:** [Evan Savage (@esavage111)](https://github.com/esavage111) and [Susanna Downing (@sdowning12)](https://github.com/sdowning12)
+- **Mentor or support contact:** Evan Savage (@esavage111)
+- **Check-in time:** 09:00 planning, 12:00 milestone/cut review, and 16:30 wrap-up during the event; adjust in the team channel.
+- **Slack general channel:** [St. Jude Biohackathon general Slack](https://stjudebiohackathon.slack.com/archives/C04JD4M3TCM)
 
 Use `project-management/check-in.md` for short updates when useful (create the file if needed). Do not store private contact details or sensitive project information in this public repository.
 

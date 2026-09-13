@@ -1,0 +1,13 @@
+{
+  "seed": 260910,
+  "primary_endpoint": "reference_HRDsum",
+  "primary_method": "shared_autosomal_CpG_elastic_net",
+  "secondary_methods": ["methylation_total_CNV_elastic_net", "CpG_CNV_fusion_elastic_net"],
+  "locked_cancer_types": ["GBM", "LGG"],
+  "max_features_initial": 5000,
+  "max_missing_fraction_initial": 0.05,
+  "synthetic_primary": false,
+  "HRD_high_threshold_exploratory": 42,
+  "coverage_nominal": 0.95,
+  "note": "Protocol defaults mirrored in initial R implementation; no CLI configuration loader yet. Edit and version both deliberately before frozen testing."
+}

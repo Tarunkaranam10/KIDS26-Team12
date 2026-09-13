@@ -1,0 +1,33 @@
+{
+  "bridge": "HM450_to_EPIC_v1_hg19",
+  "annotation_release": "Zhou InfiniumAnnotation archive/202209",
+  "filters": [
+    "probe ID present on both arrays",
+    "cg probes only",
+    "autosomes chr1-chr22",
+    "identical hg19 CpG coordinate",
+    "MASK_general false on both arrays"
+  ],
+  "counts": {
+    "hm450_cg": 482421,
+    "epic_cg": 862927,
+    "common_id": 449521,
+    "retained": 384640
+  },
+  "output_sha256": "f359e43bc171c544e55e60000905bb0bba1c44ee0b37f3144c8ec733e052e5fc",
+  "sources": {
+    "HM450": {
+      "url": "https://raw.githubusercontent.com/zhou-lab/InfiniumAnnotationV1/main/Anno/HM450/archive/202209/HM450.hg19.manifest.tsv.gz",
+      "path": "data\\raw\\annotation\\HM450.hg19.manifest.202209.tsv.gz",
+      "bytes": 28670538,
+      "sha256": "88e995655e68b2867105e02924ad9f3ca6d51357e187676053bba935bf1fbc65"
+    },
+    "EPIC": {
+      "url": "https://raw.githubusercontent.com/zhou-lab/InfiniumAnnotationV1/main/Anno/EPIC/archive/202209/EPIC.hg19.manifest.tsv.gz",
+      "path": "data\\raw\\annotation\\EPIC.hg19.manifest.202209.tsv.gz",
+      "bytes": 49229365,
+      "sha256": "81fbb7def0759acb60385eff870f838cbbbb636ead4d4dcc2391d3ad6fb8b72e"
+    }
+  },
+  "warning": "Valid for EPIC v1 only. Confirm PBTP array generation; EPIC v2 requires a separately versioned bridge."
+}

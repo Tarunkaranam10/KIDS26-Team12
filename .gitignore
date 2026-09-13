@@ -155,3 +155,21 @@ dmypy.json
 .pyre/
 .myenv/
 requirements.txt
+
+# KIDS26 data governance
+/data/
+/results/
+/models/
+/tmp/
+*.idat
+*.bam
+*.cram
+*.vcf*
+*.pdf
+*.crdownload
+.env
+*token*
+__pycache__/
+.venv/
+renv/library/
+renv/staging/

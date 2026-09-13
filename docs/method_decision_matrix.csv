@@ -1,0 +1,10 @@
+Candidate,Expected utility,Interpretability,Sample efficiency,Batch/450K-EPIC robustness,Cross-cancer expectation,Compute / implementation,n-of-1,Leakage risk,Biology / three-day decision
+A CpG-only,Strong baseline hypothesis,"M-H, coefficients correlated",H with regularization,M after frozen manifest/bridge,Uncertain; tissue dominates,Low / easy after data,H if frozen,Selection/scaling outside folds,Primary
+B methyl-CNV-only,May capture broad instability,H,"H, few features",M; normals/purity dependent,"Uncertain, more structural",Caller cost medium; regression low,H with fixed normals,Reference CN used as input; manual shifts,"Secondary 1, gated"
+C fusion,Possible incremental information,M,M,Two sources of assay shift,No assumed improvement,Medium,H with both fixed views,Different subsets/late selection,"Secondary 2, gated"
+D components,Reveals which scars predictable,H output interpretation,M; no extra independent N,Same as inputs,Uncertain,3 fits,H,Error covariance/same-label overclaim,Post-core diagnostic
+E RNA elastic net/ssGSEA,Orthogonal modality precedent,M,H for regularized model,Not 450K/EPIC; RNA processing mismatch,Adult evidence; pediatric unknown,Extra acquisition/integration,Conditional on fixed ranks/gene universe,Cohort normalization/source overlap,Defer unless ready
+F PCA/AE/VAE,Compression; may encode tissue,L-M,PCA H; VAE lower,Not automatic harmonization,No guarantee of unseen-tissue transfer,PCA low; VAE high,Frozen encoder possible,Unsupervised full-cohort fitting,PCA sensitivity later; VAE post-event
+G RF/XGBoost,Possible nonlinear gain on reduced data,M-L,M,No intrinsic protection,Extrapolation poor,"Medium, extra tuning",H,Global feature selection/tuning,Not core
+H elastic net,Stable p>>n baseline; extrapolates linearly,H subject to correlated CpGs,H,Must freeze transformations,"Test, do not assume",Low; R glmnet,H,cv.glmnet alone does not nest preprocessing,Chosen estimator for A/B/C
+I deep NN,Unproven benefit for this N/endpoint,L,L,Needs explicit domain work,High uncertainty,High,Possible,Large tuning/search surface,Cut from hackathon

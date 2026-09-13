@@ -1,0 +1,7 @@
+id	filename	md5	size	patient_id	sample_id	cancer_type	platform	workflow	access
+002aac11-9915-4c44-a317-123f928b381c	d1606969-f101-4b70-885c-11e9e317439b_noid_Red.idat	837c3e7010a3df44bc6ad13d9daea893	8095228	TCGA-E9-A244	TCGA-E9-A244-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open
+0035d22a-dff1-493a-b3f0-1133e72b9461	65c85bfd-ab3b-49b9-b84d-7bd1ed25bd87_noid_Red.idat	3ccb15be7762df8937d0b56258282366	8095311	TCGA-MS-A51U	TCGA-MS-A51U-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open
+003ecb06-c733-4dbb-9a26-6d1c92fe98dd	4801dd26-278c-4c73-90e4-af06243e4272_noid_Red.idat	641457eeb1e14519cee0dac934b37b05	8095228	TCGA-E9-A248	TCGA-E9-A248-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open
+0213ef41-f262-494a-bb5b-44c6e606977d	4801dd26-278c-4c73-90e4-af06243e4272_noid_Grn.idat	0d210a9151b2fa64aaf061dd807cc60d	8095228	TCGA-E9-A248	TCGA-E9-A248-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open
+18991a0a-6f64-4191-a9bb-48ffa438be76	65c85bfd-ab3b-49b9-b84d-7bd1ed25bd87_noid_Grn.idat	9c2f65024fd299a97c50f2d2ba01cf68	8095311	TCGA-MS-A51U	TCGA-MS-A51U-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open
+f73b6913-4c7d-419c-ae87-17e9d85f4a59	d1606969-f101-4b70-885c-11e9e317439b_noid_Grn.idat	3baaac4c8b72a87b13ff8ec8807a34fd	8095228	TCGA-E9-A244	TCGA-E9-A244-01A	BRCA	Illumina Human Methylation 450	SeSAMe Methylation Beta Estimation	open

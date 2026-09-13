@@ -1,0 +1,5 @@
+id	filename	md5	size
+66dd07d7-6366-4774-83c3-5ad1e22b177e	TCGA.HRD_withSampleID.txt	9eed948082cc88d2b26d2f5a1bf2d2d2	280336
+0f31b768-7f67-4fc4-abc3-06ac5bd90bf0	TCGASubtype.20170308.tsv	d0a6054b799a8a61488636ad400c3af9	603836
+1a7d7be8-675d-4e60-a105-19d4121bdebf	merged_sample_quality_annotations.tsv	05ddd2270fb1fb24fbdc2fe9bf7384e5	8463670
+4f277128-f793-4354-a13d-30cc7fe9f6b5	TCGA_mastercalls.abs_tables_JSedit.fixed.txt	8ea2ca92c8ae58350538999dfa1174da	901812
