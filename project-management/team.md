@@ -24,6 +24,6 @@
 | Talia Dalton | @talidalton | Data Explorer | Pediatric cancer dataset exploration and QC | Sai Thulabandu |
 | Ulofe Uduokhai | @c4usal | Technical Contributor, Data Explorer, Product Designer | Elastic-net model support, Shiny app development | Kayode Raheem |
 | Eshwar P. Alicom | [confirm handle] | Domain Expert, Technical Contributor | HRD/genomic scar domain expertise, model validation input | Henry Dinh |
-| Henry Dinh | [confirm handle] | Domain Expert | Domain expertise on pediatric high-grade glioma and cancer genomics | Eshwar P. Alicom |
+| Henry Dinh | @HenryDinh2005 | Domain Expert | Domain expertise on pediatric high-grade glioma and cancer genomics | Eshwar P. Alicom |
 
 Roles can overlap. Revisit them when the project direction or stack changes.
