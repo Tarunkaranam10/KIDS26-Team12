@@ -1,6 +1,6 @@
 # Team and Roles
 
-- **Team name:** Genomic Scars Pipeline: Assessment and Visualization Shiny (Team 12)
+- **Team name:** Methyl-HRD: Cross-cancer prediction of genomic-scar burden (Team 12)
 - **Team lead(s):** Evan Savage (@esavage111) and Susanna Downing (@sdowning12)
 - **Communication channel:** [Add link]
 - **Project question/problem:** Can a frozen methylation model predict independently measured HRDsum in a cancer type it has not seen, ultimately including pediatric high-grade glioma?
