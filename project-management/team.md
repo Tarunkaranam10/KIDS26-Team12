@@ -25,6 +25,6 @@
 | Ulofe Uduokhai | @c4usal | Technical Contributor, Data Explorer, Product Designer | Elastic-net model support, Shiny app development | Kayode Raheem |
 | Eshwar P. Alicom | @Esh-war-123 | Domain Expert, Technical Contributor | HRD/genomic scar domain expertise, model validation input | Henry Dinh |
 | Henry Dinh | @HenryDinh2005 | Domain Expert | Domain expertise on pediatric high-grade glioma and cancer genomics | Eshwar P. Alicom |
-| Jason Vu | @JVVU01 | Data Explorer | Classifier back end or Shiny app front end development | Evan Savage |
+| Jason Vu | @JVVU01 | Data Explorer | Implementation and benchmarking of HRD methods, HRDsum evaluation on PBTP cohort, and comparative analysis | Evan Savage |
 
 Roles can overlap. Revisit them when the project direction or stack changes.
