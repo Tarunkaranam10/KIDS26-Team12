@@ -69,7 +69,7 @@ md5 (`a92f50490cf4eca98b0d19e10927de9d`).
 
 ---
 
-### B2. R runtime never executed
+### B2. R runtime never executed — **RESOLVED 2026-09-16**
 
 **Symptom.** `docs/19_R_AND_SHINY_AUDIT.md` states no R executable was available;
 all leakage and preprocessing guarantees are verified *by code inspection only*.
@@ -89,6 +89,39 @@ leakage guarantees are the scientific foundation of the whole design.
 
 **Done when.** Smoke tests pass on real infrastructure and the leakage assertion
 is part of the test suite rather than a comment.
+
+> ### SINGLE-FOLD DRY RUN 2026-09-16 (LSF job 323075937, noderome117)
+>
+> The full modelling path executed end to end on real data for the first time.
+> Fold 1 (ACC, the smallest development type) completed successfully:
+>
+> | Quantity | Value |
+> |---|---|
+> | Train / test | 6,988 / 77 (locked CNS correctly excluded) |
+> | `fit_en` | 53.2 min |
+> | Wall time | 55.4 min |
+> | **Peak memory** | **173 GB** |
+> | Selected hyperparameters | alpha 0.1, lambda 1.411, **interior** to its path |
+> | Non-zero coefficients | 772 of 5,000 features |
+> | Artefacts written | all five per-fold files |
+>
+> **Two findings that changed the array configuration.**
+>
+> 1. **Peak memory is 173 GB, not the 75 GB** the preprocessing-only benchmark
+>    implied. `fit_en` additionally holds standardised inner-fold matrices and
+>    glmnet's working copies on top of the 19 GB beta matrix. The array was
+>    revised from `mem=110GB %15` to `mem=230GB %6`. The original setting would
+>    have needed ~3.5 TB against 2.4 TB available and caused mass memory kills.
+> 2. **A fold costs ~55 min, not ~45 min**, because the benchmark excluded
+>    glmnet. Thirty folds at 6-way concurrency is five waves, roughly 5–6 h.
+>
+> **The lambda anchoring works as intended.** The selected lambda was interior
+> to its data-derived path, which is the outcome that indicates the path was
+> wide enough. Under the old hardcoded grid the nearest values were 1 and 10.
+>
+> **Still outstanding for B2:** `tests/smoke_model.R` has not been run on the
+> cluster, and the explicit leakage assertion is not yet in the test suite. The
+> dry run exercises the same code path but is not a substitute for that test.
 
 ---
 
