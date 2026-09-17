@@ -123,6 +123,35 @@ is part of the test suite rather than a comment.
 > cluster, and the explicit leakage assertion is not yet in the test suite. The
 > dry run exercises the same code path but is not a substitute for that test.
 
+> ### SMOKE TESTS + LEAKAGE ASSERTIONS 2026-09-16 (LSF job 323078428, noderome117)
+>
+> **B2 is now fully closed.** `tests/smoke_model.R` passed on cluster
+> infrastructure, and the leakage guarantee is executable rather than a comment.
+>
+> Check 7 was added to the suite with six assertions:
+>
+> | Assertion | What it guards |
+> |---|---|
+> | 7a | Stored centre/scale equal training-only statistics |
+> | 7b | Refitting on the same training rows is deterministic |
+> | 7c | Held-out data standardised with training constants stays off-centre |
+> | 7d | The transform object is not mutated by being applied |
+> | 7e | Features align by NAME with unseen probes present and order shuffled |
+> | 7f | The lambda path is reproducible from training rows alone |
+>
+> **7c is the load-bearing one, and it was validated against a negative
+> control.** A deliberately leaky implementation that recentres on the data it
+> is handed produces column means of ~7e-17, while the correct implementation
+> produces ~1.2. The assertion threshold (>0.5) separates them decisively, so
+> this is a test that can actually fail — unlike the tautological QC gate
+> described in B5.
+>
+> One adjustment during development: 7a uses `all.equal(tolerance=1e-12)` rather
+> than `identical()`, because `fit_preprocess()` uses `matrixStats::colMeans2`
+> while the check uses base `colMeans`. They agree to ~1e-16 — a summation-order
+> difference, not a difference in what was computed. Using `identical()` would
+> have made the test fail for a reason unrelated to leakage.
+
 ---
 
 ### B3. Preprocessing is ~42 hours for full nested LOCO — **MITIGATED 2026-09-16**
