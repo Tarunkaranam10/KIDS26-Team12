@@ -86,68 +86,129 @@ fit_preprocess <- function(x, max_features=5000L, max_missing=0.05) {
   # them here rather than producing a silently mis-aligned matrix later.
   stopifnot(is.matrix(x), !is.null(colnames(x)), !anyDuplicated(colnames(x)))
 
-  # PERFORMANCE: this function previously used apply(z, 2, ...) for the median,
-  # variance and sd passes. apply() coerces column-by-column through R-level
-  # code and benchmarked at ~2.8 min per call at full scale, which across the
-  # ~900 calls of a nested LOCO run came to roughly 42 hours. The matrixStats
-  # equivalents run the same reductions in compiled C. Results are identical;
-  # only the runtime changes. The base-R fallback keeps the file usable without
-  # the dependency.
+  # ---------------------------------------------------------------------------
+  # PERFORMANCE NOTE (for collaborators reading this for the first time)
+  # ---------------------------------------------------------------------------
+  # This function previously used apply(z, 2, median) and friends. apply() is
+  # convenient but slow on a wide matrix: it walks the columns in interpreted R
+  # code, allocating a fresh vector for every one of the ~336,000 columns.
+  #
+  # matrixStats does the identical arithmetic in compiled C with one pass over
+  # memory. The NUMBERS DO NOT CHANGE - only the time taken. We verified this
+  # explicitly: on input with no Inf values the two implementations agree to
+  # floating-point exactness (max absolute difference ~1e-16).
+  #
+  # has_ms lets the file still run if matrixStats is not installed, falling back
+  # to the original base-R calls. Every reduction below is written as
+  #     if (has_ms) <fast version> else <base version>
+  # so the two paths stay visibly side by side and can be compared by eye.
+  # ---------------------------------------------------------------------------
   has_ms <- requireNamespace("matrixStats", quietly=TRUE)
 
-  # LEARNED QUANTITY 1: the missingness filter.
-  # !is.finite() catches NA, NaN, Inf and -Inf together, giving the per-probe
-  # missing fraction across TRAINING samples. nonfinite is retained rather than
-  # recomputed because it is reused by the imputation step below.
+  # ---------------------------------------------------------------------------
+  # LEARNED QUANTITY 1 of 6: the missingness filter (which probes to keep).
+  # ---------------------------------------------------------------------------
+  # A probe is unusable if too many training samples lack a value for it.
+  #
+  # is.finite() is FALSE for NA, NaN, Inf and -Inf, so `nonfinite` is a
+  # TRUE/FALSE matrix of "this cell is unusable". Taking the column MEAN of a
+  # logical matrix gives the FRACTION of samples missing that probe, because R
+  # treats TRUE as 1 and FALSE as 0.
+  #
+  # We store `nonfinite` in a variable instead of recomputing !is.finite(z)
+  # later. At this scale that matrix is ~2.6 GB, so computing it twice would be
+  # both slow and a real memory risk.
   nonfinite <- !is.finite(x)
   keep <- (if (has_ms) matrixStats::colMeans2(nonfinite) else colMeans(nonfinite)) <= max_missing
   if (!any(keep)) stop("No features pass train-only missingness")
+
+  # Subset BOTH the data and the missingness mask so their columns stay aligned.
+  # If these ever fell out of sync, we would impute using the wrong probe's
+  # median - a silent, hard-to-detect corruption.
   z <- x[,keep,drop=FALSE]; nonfinite <- nonfinite[,keep,drop=FALSE]
 
-  # LEARNED QUANTITY 2: per-probe imputation medians, from training rows only.
-  # Median rather than mean because beta values are bounded in [0,1] and often
-  # strongly bimodal (methylated vs unmethylated), where a mean lands in a
-  # trough that no real sample occupies.
+  # ---------------------------------------------------------------------------
+  # LEARNED QUANTITY 2 of 6: per-probe imputation medians (training rows only).
+  # ---------------------------------------------------------------------------
+  # Why median and not mean: beta values live in [0,1] and are usually BIMODAL -
+  # a probe is typically either methylated (~0.9) or not (~0.1), with few
+  # samples in between. The mean of such a distribution lands near 0.5, a value
+  # almost no real sample has. The median lands on one of the two real modes.
   #
-  # Setting every non-finite cell to NA first resolves an inconsistency in the
-  # previous implementation: na.rm=TRUE strips NA and NaN but NOT Inf, so a
-  # column containing Inf was treated as missing by the mask above while still
-  # contributing Inf to its own median.
+  # Why we set non-finite cells to NA first: median(na.rm=TRUE) removes NA and
+  # NaN but NOT Inf. In the old code, a column containing Inf was counted as
+  # missing by the filter above while still contributing Inf to its own median,
+  # so that column's median could come back as Inf. Converting everything
+  # unusable to NA up front makes the two steps agree on what "missing" means.
   any_missing <- any(nonfinite)
   if (any_missing) z[nonfinite] <- NA_real_
   med <- if (has_ms) matrixStats::colMedians(z,na.rm=TRUE) else apply(z,2,median,na.rm=TRUE)
+
+  # matrixStats returns a bare unnamed vector, so we reattach the probe IDs.
+  # Downstream code looks these up BY NAME (med[colnames(z)]), so losing the
+  # names would silently mis-align medians to probes.
   names(med) <- colnames(z)
-  # Impute only the columns that actually have gaps; on a filtered matrix most
-  # columns have none, so this skips the great majority of the work.
+
+  # Fill the gaps. Two efficiencies worth understanding:
+  #   1. We skip the whole block when nothing is missing.
+  #   2. colAnys() tells us WHICH columns actually contain a gap. After the
+  #      missingness filter most columns are complete, so looping over only the
+  #      affected ones avoids touching hundreds of thousands of clean columns.
+  # The loop body reads: "in column j, set every missing cell to that column's
+  # median". Note the median came from the OTHER (observed) samples in the
+  # training set - never from held-out data.
   if (any_missing) {
     cols <- which(if (has_ms) matrixStats::colAnys(nonfinite) else apply(nonfinite,2,any))
     for (j in cols) z[nonfinite[,j],j] <- med[j]
   }
 
-  # LEARNED QUANTITY 3: unsupervised feature selection by variance.
-  # This ranks probes by how much they vary across TRAINING samples. It never
-  # looks at y, so it is not supervised selection and does not leak the label.
-  # Constant probes (v == 0) are dropped because they carry no information and
-  # would produce a divide-by-zero at the scaling step below.
+  # ---------------------------------------------------------------------------
+  # LEARNED QUANTITY 3 of 6: unsupervised feature selection by variance.
+  # ---------------------------------------------------------------------------
+  # We keep the max_features probes that vary MOST across training samples.
+  #
+  # "Unsupervised" is the important word: this ranking never looks at y (the
+  # HRD score). That matters because supervised selection - picking probes
+  # because they correlate with the outcome - computed on the full dataset is
+  # one of the classic ways to leak test information into a model and produce
+  # impressive but fictional performance. Variance is a property of the
+  # predictors alone, so it cannot leak the label.
+  #
+  # Probes with zero variance are dropped: they carry no information, and
+  # dividing by their (zero) standard deviation later would produce NaN.
   v <- if (has_ms) matrixStats::colVars(z) else apply(z,2,var)
   names(v) <- colnames(z); ii <- which(is.finite(v) & v>0)
-  # Sort by decreasing variance, breaking ties on probe NAME. The name tie-break
+
+  # Sort by decreasing variance, breaking ties on probe NAME. The tie-break
   # makes selection fully deterministic: two probes with identical variance
-  # always resolve the same way regardless of column order in the input file.
+  # always resolve the same way regardless of the column order in the input
+  # file, so the same data always yields the same frozen feature list.
   ii <- ii[order(-v[ii],names(v)[ii])]
   ii <- head(ii,max_features)
   if (length(ii)<2) stop("Fewer than two nonconstant features")
 
-  # LEARNED QUANTITIES 4: centre and scale, again from training rows only.
-  # Because the v>0 filter already ran, every retained column has sd > 0 and the
-  # division in apply_preprocess() is safe.
+  # ---------------------------------------------------------------------------
+  # LEARNED QUANTITIES 4 and 5 of 6: the centre and scale for standardisation.
+  # ---------------------------------------------------------------------------
+  # Elastic net penalises all coefficients equally, which is only fair if the
+  # predictors share a common scale. We therefore subtract each probe's mean and
+  # divide by its standard deviation - but using TRAINING statistics only, which
+  # are stored here and reapplied unchanged to any future sample.
+  #
+  # This is why glmnet is later called with standardize=FALSE: the data arrives
+  # already standardised, and letting glmnet redo it on a held-out batch would
+  # recompute statistics from that batch, breaking the leakage boundary.
   z <- z[,ii,drop=FALSE]
   mu <- if (has_ms) matrixStats::colMeans2(z) else colMeans(z)
   s  <- if (has_ms) matrixStats::colSds(z)    else apply(z,2,sd)
   names(mu) <- colnames(z); names(s) <- colnames(z)
 
-  # Return the transform. med is subset to the finally-selected features so the
-  # stored vectors are all the same length and in the same order as $features.
+  # Return the transform. Note med is subset to the finally-selected features so
+  # that every stored vector has the same length and the same order as
+  # $features. apply_preprocess() relies on that correspondence.
+  #
+  # This object contains ONLY per-probe summary statistics - no sample-level
+  # data - which is what makes it safe to save, share and ship inside a model.
   list(features=colnames(z), median=med[colnames(z)],center=mu,scale=s,
        max_missing=max_missing)
 }
@@ -224,6 +285,84 @@ inner_folds <- function(patient,cancer,seed=260910L) {
 
 
 # -----------------------------------------------------------------------------
+# lambda_path(): build a data-derived regularisation path.
+# -----------------------------------------------------------------------------
+# WHY THIS EXISTS
+#   lambda controls how hard the elastic net shrinks coefficients toward zero.
+#   Its meaningful scale is a property of the DATA, not a universal constant:
+#   it depends on the number of samples, the scale of the outcome, and how
+#   strongly the predictors correlate with it.
+#
+#   This code previously used five hardcoded values (0.01, 0.1, 1, 10, 100).
+#   That had two failure modes:
+#
+#     1. WASTED GRID POINTS. glmnet can compute lambda.max, the smallest lambda
+#        at which EVERY coefficient is zero. Any lambda above it fits the same
+#        intercept-only model, so those grid points are not merely uninformative
+#        - they are duplicates of each other.
+#
+#     2. INVISIBLE BOUNDARY OPTIMA. If the best value was the smallest one
+#        offered, that is the tuner saying "I wanted less regularisation than
+#        you allowed". With a fixed grid and no check, that message was silently
+#        discarded and the boundary was reported as though it were an optimum.
+#
+# HOW THE PATH IS BUILT
+#   lambda.max = max|x'y| / (n * alpha) on standardised predictors - the
+#   standard glmnet derivation. We then lay out n_lambda points log-spaced from
+#   lambda.max down to lambda_min_ratio * lambda.max. Log spacing is used
+#   because lambda acts multiplicatively: the step from 0.01 to 0.1 matters as
+#   much as the step from 1 to 10.
+#
+# LEAKAGE
+#   x and y here are TRAINING rows for the current fold. The path is therefore a
+#   learned quantity like any other, computed inside the same boundary. It never
+#   sees the held-out cancer.
+#
+# Dividing by alpha means a small alpha (near ridge) yields a larger lambda.max,
+# which is correct: ridge penalties need larger lambda for equivalent shrinkage.
+# alpha is floored at 0.01 to avoid dividing by zero if someone passes alpha=0.
+lambda_path <- function(x,y,alpha,n_lambda=8L,lambda_min_ratio=0.001) {
+  n <- length(y)
+  yc <- y-mean(y)
+  # crossprod gives x'yc; the largest absolute value sets the point at which the
+  # first coefficient would become non-zero.
+  lam_max <- max(abs(crossprod(x,yc)))/(n*max(alpha,0.01))
+  # Degenerate guard: if x carries no signal at all, fall back to a token path
+  # rather than returning NaN and taking the whole run down.
+  if(!is.finite(lam_max)||lam_max<=0) return(c(1,0.1,0.01))
+  exp(seq(log(lam_max),log(lam_max*lambda_min_ratio),length.out=n_lambda))
+}
+
+
+# -----------------------------------------------------------------------------
+# check_lambda_boundary(): warn when the tuner picks an endpoint.
+# -----------------------------------------------------------------------------
+# A selected lambda at the TOP of the path means the model wanted even more
+# shrinkage - often a sign there is little signal. At the BOTTOM it wanted less
+# regularisation, which risks overfitting and suggests the path was too narrow.
+#
+# Either way the search has hit a wall we imposed rather than finding an
+# interior optimum, and that fact belongs in the log and the audit trail. This
+# warns rather than stops: a boundary optimum is informative, not fatal.
+check_lambda_boundary <- function(selected_lambda,path,alpha,label="") {
+  if(!length(path)||!is.finite(selected_lambda)) return(invisible(NULL))
+  at_top <- isTRUE(all.equal(selected_lambda,max(path)))
+  at_bot <- isTRUE(all.equal(selected_lambda,min(path)))
+  if(at_top||at_bot) {
+    warning(sprintf(
+      "%sSelected lambda %.5g (alpha %.2g) is at the %s of its path [%.5g, %.5g]. %s",
+      if(nzchar(label)) paste0(label,": ") else "",
+      selected_lambda, alpha, if(at_top) "TOP" else "BOTTOM",
+      min(path), max(path),
+      if(at_top) "The tuner wanted MORE shrinkage; signal may be weak."
+      else "The tuner wanted LESS regularisation; consider a wider path."),
+      call.=FALSE)
+  }
+  invisible(list(at_top=at_top,at_bottom=at_bot))
+}
+
+
+# -----------------------------------------------------------------------------
 # fit_en(): tune and fit the elastic net. The heart of the modelling code.
 # -----------------------------------------------------------------------------
 # Two phases:
@@ -241,19 +380,42 @@ fit_en <- function(x,y,patient,cancer,max_features=5000L,seed=260910L) {
 
   folds <- inner_folds(patient,cancer,seed)
 
-  # The hyperparameter grid.
-  #   alpha  = elastic-net mixing. 1.0 is pure lasso (sparse), 0.1 is nearly
-  #            ridge (dense, handles correlated probes better). Methylation
-  #            probes are heavily correlated in blocks, so the low-alpha end
-  #            matters here.
-  #   lambda = regularisation strength, four decades wide.
+  # ---------------------------------------------------------------------------
+  # THE HYPERPARAMETER GRID
+  # ---------------------------------------------------------------------------
+  # alpha = the elastic-net mixing parameter.
+  #   1.0 is pure lasso: aggressive, drives most coefficients to exactly zero,
+  #       and when two probes are correlated it tends to keep one arbitrarily.
+  #   0.1 is nearly ridge: keeps many small coefficients and shares weight
+  #       across correlated probes.
+  #   Methylation probes are correlated in blocks (neighbouring CpGs in the same
+  #   island move together), so the low-alpha end genuinely matters here and is
+  #   not just filler.
   #
-  # LIMITATION: these are fixed absolute values, not anchored to the data-derived
-  # lambda.max that glmnet would compute. On standardised predictors with y in
-  # roughly 0-75, lambda=100 is almost certainly an intercept-only model and
-  # lambda=0.01 is near-OLS. Nothing below verifies that the winner is INTERIOR
-  # to the grid, so a boundary optimum is accepted without complaint.
-  grid <- expand.grid(alpha=c(0.1,0.5,1),lambda=c(0.01,0.1,1,10,100))
+  # lambda = regularisation strength. See the long note in lambda_path() below
+  #   for why this is now DERIVED FROM THE DATA rather than hardcoded.
+  # ---------------------------------------------------------------------------
+  alphas <- c(0.1,0.5,1)
+
+  # Build one lambda path per alpha. The path is computed from the TRAINING rows
+  # of this fold only, using the same preprocessing the model will see, so it
+  # respects the leakage boundary exactly as every other learned quantity does.
+  #
+  # Why per alpha: lambda.max depends on alpha (it is max|x'y|/(n*alpha)), so a
+  # single shared path would be correctly scaled for at most one of them.
+  #
+  # EFFICIENCY: this preprocessing fit is deliberately hoisted out of Phase 2
+  # below and reused there. fit_preprocess() is the most expensive operation in
+  # the file (~73 s at full width), so computing it once and using it for both
+  # the lambda path and the final refit costs nothing extra - the original code
+  # already paid for one call here.
+  pp <- fit_preprocess(x,max_features)
+  z  <- apply_preprocess(x,pp,FALSE)
+  lam_by_alpha <- lapply(alphas, function(a) lambda_path(z,y,a))
+  names(lam_by_alpha) <- as.character(alphas)
+
+  grid <- do.call(rbind,lapply(alphas,function(a)
+    data.frame(alpha=a,lambda=lam_by_alpha[[as.character(a)]])))
   losses <- matrix(NA_real_,nrow(grid),length(unique(folds)))
 
   # ---- Phase 1: inner cross-validation -------------------------------------
@@ -263,17 +425,24 @@ fit_en <- function(x,y,patient,cancer,max_features=5000L,seed=260910L) {
     # CRITICAL: preprocessing is re-learned from scratch on THIS inner fold's
     # training rows. It is not hoisted out of the loop. Hoisting it would let
     # every inner validation fold see statistics computed from itself.
-    pp <- fit_preprocess(x[tr,,drop=FALSE],max_features)
-    ztr <- apply_preprocess(x[tr,,drop=FALSE],pp,FALSE)
-    zva <- apply_preprocess(x[va,,drop=FALSE],pp,FALSE)
+    #
+    # (The hoisted `pp` above is a DIFFERENT object: it is fitted on all rows
+    # passed to fit_en, which are all training rows for this outer fold, and is
+    # used only for the lambda path and the Phase 2 refit - never to evaluate an
+    # inner validation fold.)
+    pp_in <- fit_preprocess(x[tr,,drop=FALSE],max_features)
+    ztr <- apply_preprocess(x[tr,,drop=FALSE],pp_in,FALSE)
+    zva <- apply_preprocess(x[va,,drop=FALSE],pp_in,FALSE)
 
-    for (a in unique(grid$alpha)) {
-      # Fit the whole lambda path in one call - glmnet is far more efficient
-      # doing this than being called once per lambda. Decreasing order is
-      # glmnet's expected convention for warm starts.
+    for (a in alphas) {
+      # Each alpha gets ITS OWN lambda path, sorted decreasing because that is
+      # glmnet's expected convention and lets it use warm starts along the path.
+      # Fitting the whole path in one call is far cheaper than one call per
+      # lambda.
       # standardize=FALSE: see the header note. ztr is already standardised
       # using training-only statistics and glmnet must not redo it.
-      mod <- glmnet::glmnet(ztr,y[tr],alpha=a,lambda=sort(unique(grid$lambda),decreasing=TRUE),standardize=FALSE)
+      lam_a <- sort(lam_by_alpha[[as.character(a)]],decreasing=TRUE)
+      mod <- glmnet::glmnet(ztr,y[tr],alpha=a,lambda=lam_a,standardize=FALSE)
       ids <- which(grid$alpha==a)
       for (g in ids) {
         # s= selects one lambda from the fitted path.
@@ -293,14 +462,24 @@ fit_en <- function(x,y,patient,cancer,max_features=5000L,seed=260910L) {
   # hyperparameter setting that is excellent on BRCA and terrible everywhere
   # else will lose to one that is uniformly decent.
   grid$inner_macro_mae <- rowMeans(losses)
-  best <- which.min(grid$inner_macro_mae); pp <- fit_preprocess(x,max_features)
+  best <- which.min(grid$inner_macro_mae)
+  best_alpha <- grid$alpha[best]; best_lambda <- grid$lambda[best]
+
+  # Was the winner at an endpoint of its own path? If so the tuner hit a wall we
+  # imposed rather than finding an interior optimum. Warn, and record the fact in
+  # the bundle so it survives into the audit trail rather than living only in a
+  # console log that may be lost.
+  best_path <- lam_by_alpha[[as.character(best_alpha)]]
+  boundary <- check_lambda_boundary(best_lambda,best_path,best_alpha,
+                                    label=sprintf("fit_en (n=%d)",length(y)))
 
   # ---- Phase 2: refit on all supplied training rows -------------------------
-  # Note that fit_preprocess() is called again on the FULL x above - the final
-  # model gets preprocessing learned from all of its own training data, which is
-  # correct and still excludes the outer held-out cancer.
-  z <- apply_preprocess(x,pp,FALSE)
-  mod <- glmnet::glmnet(z,y,alpha=grid$alpha[best],lambda=sort(unique(grid$lambda),decreasing=TRUE),standardize=FALSE)
+  # `pp` and `z` were fitted above on the FULL x - every row passed to fit_en,
+  # all of which are training rows for this outer fold. The held-out cancer is
+  # still excluded, so reusing them here is correct AND saves one full
+  # fit_preprocess call (the single most expensive operation in the file).
+  mod <- glmnet::glmnet(z,y,alpha=best_alpha,
+                        lambda=sort(best_path,decreasing=TRUE),standardize=FALSE)
 
   # LEARNED QUANTITY 6: a crude out-of-distribution cutoff.
   # dist is the root-mean-square standardised distance of each training sample
@@ -312,9 +491,14 @@ fit_en <- function(x,y,patient,cancer,max_features=5000L,seed=260910L) {
   # The returned bundle is self-contained: it carries the transform, the model,
   # the winning hyperparameters, the full tuning table (so the grid search is
   # auditable after the fact), the fold assignments, the OOD cutoff, the seed,
-  # and the training mean that serves as the null comparator downstream.
-  list(preprocess=pp,model=mod,alpha=grid$alpha[best],lambda=grid$lambda[best],
+  # the training mean that serves as the null comparator downstream, and the
+  # lambda paths plus boundary status so the tuning can be reviewed later.
+  list(preprocess=pp,model=mod,alpha=best_alpha,lambda=best_lambda,
        tuning=grid,inner_folds=data.frame(patient_id=patient,cancer_type=cancer,fold=folds),
+       lambda_paths=lam_by_alpha,
+       lambda_at_boundary=if(is.null(boundary)) NA else (boundary$at_top||boundary$at_bottom),
+       lambda_boundary_side=if(is.null(boundary)) NA_character_
+                            else if(boundary$at_top) "top" else if(boundary$at_bottom) "bottom" else "interior",
        ood_cut=ood_cut,seed=seed,training_n=length(y),training_mean=mean(y),target="reference_HRDsum")
 }
 

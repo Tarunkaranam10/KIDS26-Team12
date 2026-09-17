@@ -1,0 +1,115 @@
+#!/bin/bash
+#BSUB -J "kids26_loco[1-30]%15"
+#BSUB -q biohackathon
+#BSUB -n 8
+#BSUB -R "span[hosts=1] rusage[mem=110GB]"
+#BSUB -M 110GB
+#BSUB -W 6:00
+#BSUB -o logs/loco_%J_%I.out
+#BSUB -e logs/loco_%J_%I.err
+# =============================================================================
+# KIDS26 Team 12 - nested leave-one-cancer-out as a 30-task LSF array.
+# =============================================================================
+#
+# WHAT THIS RUNS
+#   One array task per development cancer type. Each task holds out its own
+#   cancer, tunes hyperparameters on cancer-grouped inner folds built only from
+#   the remaining types, fits an elastic net, and predicts the held-out type.
+#   Tasks are fully independent - no task reads another task's output.
+#
+# WHY AN ARRAY INSTEAD OF ONE LONG JOB
+#   Measured on the real 336,480-probe matrix (job 323075601, nodegpu217):
+#       fit_preprocess   72.8 s   x 30 calls per fold
+#       apply_preprocess  8.7 s   x 58 calls per fold
+#       => ~45 min per fold, ~22 h if run serially.
+#   Running the folds concurrently collapses that to roughly the cost of one
+#   fold plus queue wait.
+#
+# -------------------------------------------------------------------------
+# RESOURCE CHOICES - all measured, not guessed
+# -------------------------------------------------------------------------
+#   [1-30]      One task per development cancer type. If the cohort ever gains
+#               or loses a type this range MUST be updated; loco_merge.R will
+#               refuse to merge if a fold is missing, which is the safety net.
+#
+#   %15         Run at most 15 tasks concurrently. This is the important knob.
+#               Each task holds ~75 GB, so 15 concurrent tasks need ~1.1 TB.
+#               The biohackathon queue has two nodes (noderome117 with 1 TB,
+#               nodegpu217 with 1.4 TB, 2.4 TB combined). Fifteen is aggressive
+#               but leaves headroom; it also keeps us from monopolising a shared
+#               reservation. With 15 slots the 30 folds run in two waves, so
+#               expect roughly 1.5-2 h wall time rather than 45 min.
+#
+#               Raise to %30 for a single wave ONLY if the queue is otherwise
+#               idle AND you have confirmed both nodes are free - 30 x 75 GB is
+#               2.25 TB, which would fill the entire reservation.
+#               Lower to %8 if other teams are queued behind you.
+#
+#   -n 8        Memory-bound, not CPU-bound: the benchmark used 367 s of CPU
+#               over 332 s of wall time, so barely more than one core was busy.
+#               Requesting 8 gives fread and matrixStats some room while keeping
+#               the slot small enough to schedule quickly. Asking for more cores
+#               would delay scheduling without speeding the job up.
+#
+#   mem=110GB   Benchmark peak was 75 GB (Max Memory 75,171 MB). fit_en now also
+#               holds a standardised copy for the lambda path, so 110 GB gives
+#               roughly 45% headroom. LSF kills a job that exceeds its request,
+#               and losing a 45-minute fold to a memory kill is far more
+#               expensive than reserving a little extra.
+#
+#   -W 6:00     The benchmark fold took ~45 min; 6 h covers a slow node, queue
+#               contention and the glmnet path, which was not part of the
+#               benchmark. LSF kills at the wall limit, so over-requesting time
+#               is cheap while under-requesting loses the entire task.
+#
+# SUBMIT
+#   bsub < scripts/lsf_loco_array.bsub
+#
+# MONITOR
+#   bjobs -A                       # array summary: done / pending / running
+#   bjobs -l <JOBID> | head -40    # detail
+#   tail -f logs/loco_<JOBID>_1.out
+#
+# AFTER ALL TASKS COMPLETE
+#   Rscript scripts/loco_merge.R results/loco_run01 data/processed/master_samples.tsv
+#
+#   The merge performs the pooled tissue-mean null, within-tissue permutation
+#   and purity-stratified analyses. Those are the results that determine whether
+#   there is a finding at all, and they cannot run per fold.
+#
+# RERUNNING A FAILED TASK
+#   Array indices are independent, so a single failure is cheap to repair:
+#       bsub -q biohackathon -n 8 -R "span[hosts=1] rusage[mem=110GB]" -M 110GB -W 6:00 \
+#            -o logs/loco_rerun_%J.out -e logs/loco_rerun_%J.err \
+#            "cd $PWD && Rscript scripts/loco_one_fold.R data/processed/beta.tsv \
+#             data/processed/master_samples.tsv results/loco_run01 <INDEX>"
+# =============================================================================
+
+set -euo pipefail
+
+REPO=/research/groups/shelagrp/home/esavage/KIDS26/KIDS26-Team12
+BETA=data/processed/beta.tsv
+META=data/processed/master_samples.tsv
+OUT=results/loco_run01
+
+cd "$REPO"
+mkdir -p logs "$OUT/folds"
+
+echo "=== array job ${LSB_JOBID} task ${LSB_JOBINDEX} on $(hostname) ==="
+echo "started: $(date)"
+free -g | head -2
+echo
+
+# Pin thread counts to the slots LSF granted. Without this, R's BLAS would spawn
+# one thread per physical core (up to 128 on nodegpu217), oversubscribing our
+# allocation, slowing this job down and disrupting others on the same host.
+export OMP_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+export OPENBLAS_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+export MKL_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+
+# LSB_JOBINDEX is 1-based and maps directly onto the 1-based fold index, which
+# indexes the sorted development cancer types.
+Rscript scripts/loco_one_fold.R "$BETA" "$META" "$OUT" "${LSB_JOBINDEX}"
+
+echo
+echo "finished: $(date)"

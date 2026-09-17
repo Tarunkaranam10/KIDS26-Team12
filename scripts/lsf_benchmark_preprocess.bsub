@@ -1,0 +1,57 @@
+#!/bin/bash
+#BSUB -J kids26_bench_preprocess
+#BSUB -q biohackathon
+#BSUB -n 8
+#BSUB -R "span[hosts=1] rusage[mem=80GB]"
+#BSUB -M 80GB
+#BSUB -W 4:00
+#BSUB -o logs/bench_preprocess_%J.out
+#BSUB -e logs/bench_preprocess_%J.err
+# =============================================================================
+# Benchmark fit_preprocess() at full width on the real beta matrix.
+# =============================================================================
+#
+# RESOURCE REASONING
+#   -n 8            fread() is threaded, and matrixStats benefits from a few
+#                   cores. We do not request more because this job is memory-
+#                   bound, not CPU-bound, and a smaller slot count schedules
+#                   faster.
+#   mem=80GB        The matrix is ~21 GB as doubles. The transpose transiently
+#                   holds both orientations (~42 GB), and fit_preprocess()
+#                   builds a logical missingness mask plus a filtered copy.
+#                   80 GB leaves headroom so the job is not killed mid-run.
+#                   Both biohackathon nodes have >=1 TB, so this is modest.
+#   -W 4:00         Generous ceiling; the job should finish far sooner. LSF
+#                   kills at the limit, so over-requesting time is cheap
+#                   insurance while under-requesting wastes the whole run.
+#
+# SUBMIT WITH
+#   bsub < scripts/lsf_benchmark_preprocess.bsub
+# =============================================================================
+
+set -euo pipefail
+
+cd /research/groups/shelagrp/home/esavage/KIDS26/KIDS26-Team12
+mkdir -p logs results/benchmark
+
+echo "=== job $LSB_JOBID on $(hostname) ==="
+echo "started: $(date)"
+echo "cores available: $(nproc)"
+free -g | head -2
+echo
+
+# Keep BLAS/OpenMP thread counts aligned with the slots LSF actually granted.
+# Without this, R's linear algebra can spawn one thread per physical core on a
+# 128-core node, oversubscribing the CPUs we were allocated and slowing the job
+# down while disrupting other users on the same host.
+export OMP_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+export OPENBLAS_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+export MKL_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+
+Rscript scripts/benchmark_preprocess.R \
+  data/processed/beta.tsv \
+  data/processed/master_samples.tsv \
+  results/benchmark
+
+echo
+echo "finished: $(date)"

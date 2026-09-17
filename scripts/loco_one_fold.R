@@ -1,0 +1,137 @@
+#!/usr/bin/env Rscript
+# =============================================================================
+# scripts/loco_one_fold.R - run ONE outer leave-one-cancer-out fold.
+# =============================================================================
+#
+# WHY THIS EXISTS
+#   scripts/train_baseline.R runs all 30 outer folds in a serial loop. Measured
+#   on the real matrix that is ~45 minutes per fold, or roughly 22 hours end to
+#   end (see results/benchmark/preprocess_benchmark.tsv).
+#
+#   The folds are completely independent of one another: fold "BRCA" never reads
+#   anything produced by fold "LUAD". That makes this an embarrassingly parallel
+#   problem, so each fold can run as its own LSF array task and the wall time
+#   collapses to roughly the cost of a single fold.
+#
+#   This script is deliberately a THIN WRAPPER around the same fit_en() /
+#   predict_en() calls that train_baseline.R makes. It does not reimplement the
+#   modelling. Keeping one implementation means the parallel path cannot quietly
+#   drift away from the serial one.
+#
+# USAGE
+#   Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index>
+#
+#   fold_index is 1-based and indexes into the sorted vector of development
+#   cancer types, which is exactly the order train_baseline.R iterates in. LSF
+#   array indices are also 1-based, so LSB_JOBINDEX maps across directly.
+#
+# OUTPUT
+#   One .rds bundle and two .tsv files per fold, written into <out_dir>/folds/.
+#   scripts/loco_merge.R then combines them into the same files train_baseline.R
+#   would have produced.
+#
+# WHAT THIS DOES NOT DO
+#   No Phase 2 freezing, no calibration reservation, no conformal interval.
+#   Those need all folds complete and belong in the merge step.
+# =============================================================================
+
+args <- commandArgs(trailingOnly=TRUE)
+if (length(args) != 4) {
+  stop("Usage: Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index>")
+}
+beta_path <- args[1]; meta_path <- args[2]; out_dir <- args[3]
+fold_index <- as.integer(args[4])
+if (is.na(fold_index) || fold_index < 1L) stop("fold_index must be a positive integer")
+
+fold_dir <- file.path(out_dir, "folds")
+dir.create(fold_dir, recursive=TRUE, showWarnings=FALSE)
+
+cat("host       :", Sys.info()[["nodename"]], "\n")
+cat("fold index :", fold_index, "\n")
+cat("started    :", format(Sys.time()), "\n\n")
+
+source("R/model.R")
+if (!requireNamespace("data.table", quietly=TRUE)) stop("Install dependencies with scripts/setup.R")
+
+# --- Load matrix and metadata ----------------------------------------------
+# This repeats the load in every array task. That is a deliberate trade: ~100 s
+# and ~75 GB per task, against the complexity and fragility of a shared-memory
+# scheme. With 30 tasks the total CPU cost of reloading is minutes, while the
+# wall-clock saving from parallelism is many hours.
+cat("reading beta matrix ...\n")
+beta <- data.table::fread(beta_path, data.table=FALSE, check.names=FALSE)
+if (anyDuplicated(beta[[1]])) stop("Duplicate probe IDs")
+x <- t(as.matrix(beta[,-1,drop=FALSE])); storage.mode(x) <- "double"; colnames(x) <- beta[[1]]
+rm(beta); invisible(gc(verbose=FALSE))
+if (any(is.finite(x) & (x < 0 | x > 1))) stop("Expected beta values in [0,1]")
+cat(sprintf("  %d samples x %d probes\n", nrow(x), ncol(x)))
+
+meta <- read.delim(meta_path, check.names=FALSE, stringsAsFactors=FALSE)
+if (anyDuplicated(meta$sample_id) || anyDuplicated(meta$patient_id)) stop("Duplicate patient/specimen")
+if (any(!rownames(x) %in% meta$sample_id)) stop("Missing sample metadata")
+meta <- meta[match(rownames(x), meta$sample_id),]
+if (any(!is.finite(meta$HRDsum)) || any(meta$HRDsum < 0)) stop("Invalid target")
+if (!all(abs(meta$HRDsum - meta$HRD_LOH - meta$LST - meta$TAI) < 1e-6)) stop("Label sum mismatch")
+
+# --- Resolve which cancer type this task owns ------------------------------
+# sort() must match train_baseline.R exactly, or task N here would not be the
+# same fold as iteration N there.
+cns <- meta$cancer_type %in% c("GBM","LGG")
+types <- sort(unique(meta$cancer_type[!cns]))
+if (fold_index > length(types)) {
+  stop(sprintf("fold_index %d exceeds the %d development cancer types", fold_index, length(types)))
+}
+type <- types[fold_index]
+cat(sprintf("\nthis task holds out: %s (%d of %d)\n", type, fold_index, length(types)))
+
+# --- Fit the fold -----------------------------------------------------------
+# Both masks carry !cns, so locked CNS samples appear in neither train nor test.
+tr <- !cns & meta$cancer_type != type
+te <- !cns & meta$cancer_type == type
+cat(sprintf("train n=%d  test n=%d\n\n", sum(tr), sum(te)))
+
+t0 <- Sys.time()
+b <- fit_en(x[tr,,drop=FALSE], meta$HRDsum[tr], meta$patient_id[tr], meta$cancer_type[tr])
+cat(sprintf("fit_en completed in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units="mins"))))
+cat(sprintf("  selected alpha=%.2g lambda=%.5g  (boundary: %s)\n",
+            b$alpha, b$lambda, b$lambda_boundary_side))
+
+p <- predict_en(b, x[te,,drop=FALSE])
+p$actual <- meta$HRDsum[te]
+p$cancer_type <- type
+p$patient_id <- meta$patient_id[te]
+p$null_prediction <- b$training_mean
+p$split <- "development_LOCO"
+
+mm <- metrics(p$actual, p$predicted_reference_HRDsum)
+mm$cancer_type <- type
+mm$train_n <- sum(tr)
+mm$selected_features <- length(b$preprocess$features)
+mm$alpha <- b$alpha
+mm$lambda <- b$lambda
+mm$lambda_at_boundary <- b$lambda_at_boundary
+mm$lambda_boundary_side <- b$lambda_boundary_side
+mm$null_MAE <- mean(abs(p$actual - b$training_mean))
+mm$abstention_rate <- mean(!p$reportable)
+
+# Per-fold null panel. Within one fold every sample is the same cancer type, so
+# the tissue-mean null collapses to this fold's own mean. The between-tissue
+# picture only appears once folds are pooled in the merge step.
+np <- null_panel(p$actual, p$predicted_reference_HRDsum, p$cancer_type, b$training_mean)
+np$cancer_type <- type
+
+# --- Write per-fold artefacts ----------------------------------------------
+# One file set per fold, named by type. The merge step globs these, so a failed
+# task is detectable simply by its outputs being absent.
+saveRDS(b, file.path(fold_dir, paste0("loco_", type, ".rds")))
+write.table(b$inner_folds, file.path(fold_dir, paste0("inner_folds_", type, ".tsv")),
+            sep="\t", row.names=FALSE, quote=FALSE)
+write.table(p, file.path(fold_dir, paste0("predictions_", type, ".tsv")),
+            sep="\t", row.names=FALSE, quote=FALSE)
+write.table(mm, file.path(fold_dir, paste0("metrics_", type, ".tsv")),
+            sep="\t", row.names=FALSE, quote=FALSE)
+write.table(np, file.path(fold_dir, paste0("nullpanel_", type, ".tsv")),
+            sep="\t", row.names=FALSE, quote=FALSE)
+
+cat("\nwrote artefacts for fold:", type, "\n")
+cat("finished   :", format(Sys.time()), "\n")
