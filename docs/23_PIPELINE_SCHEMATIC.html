@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.38">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>pipeline_schematic</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="23_PIPELINE_SCHEMATIC_files/libs/clipboard/clipboard.min.js"></script>
+<script src="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/quarto.js" type="module"></script>
+<script src="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/popper.min.js"></script>
+<script src="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/tippy.umd.min.js"></script>
+<script src="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/anchor.min.js"></script>
+<link href="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="23_PIPELINE_SCHEMATIC_files/libs/quarto-html/quarto-syntax-highlighting-15634bcf2e68342d4ad2dfa704d543f6.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="23_PIPELINE_SCHEMATIC_files/libs/bootstrap/bootstrap.min.js"></script>
+<link href="23_PIPELINE_SCHEMATIC_files/libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="23_PIPELINE_SCHEMATIC_files/libs/bootstrap/bootstrap-d4baa5d28f2e2dc08594815603a543aa.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+
+
+</head>
+
+<body class="fullcontent quarto-light">
+
+<div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
+
+<main class="content" id="quarto-document-content">
+
+
+
+
+<section id="pipeline-schematic-and-current-position" class="level1">
+<h1>23 — Pipeline Schematic and Current Position</h1>
+<p><strong>Status as of 2026-09-17 00:05 CDT.</strong> Array <code>323078995</code> running, 0 of 30 folds complete. This document is the map; <code>docs/21</code> is the blocker ledger.</p>
+<hr>
+<section id="the-whole-pipeline" class="level2">
+<h2 class="anchored" data-anchor-id="the-whole-pipeline">1. The whole pipeline</h2>
+<pre class="mermaid"><code>flowchart TD
+    subgraph ACQ["STAGE 1 — ACQUISITION (complete)"]
+        A1["TCGA PanCanAtlas download&lt;br/&gt;scripts/acquire_tcga.py&lt;br/&gt;41.5 GB, md5-gated"]
+        A2["Resolve barcodes to cases&lt;br/&gt;scripts/resolve_tcga_cases.py"]
+        A3["raw payload + .sha256 sidecar&lt;br/&gt;data/raw/pancanatlas/"]
+        A1 --&gt; A2 --&gt; A3
+    end
+
+    subgraph PREP["STAGE 2 — FEATURE PREP (complete)"]
+        P1["Technical probe allowlist&lt;br/&gt;scripts/build_probe_bridge.py&lt;br/&gt;384,640 allowed probes"]
+        P2["Bounded beta matrix&lt;br/&gt;scripts/prepare_beta.py&lt;br/&gt;writes .provenance.json"]
+        P3["beta.tsv&lt;br/&gt;336,480 probes x 7,707 samples&lt;br/&gt;28.2 GB on disk"]
+        P1 --&gt; P2 --&gt; P3
+    end
+
+    subgraph LABEL["STAGE 3 — LABELS AND METADATA (complete)"]
+        L1["Specimen-level join&lt;br/&gt;scripts/build_master.py&lt;br/&gt;ambiguous replicates EXCLUDED"]
+        L2["CNV-derived features&lt;br/&gt;scripts/cnv_features.py"]
+        L3["Cohort audit&lt;br/&gt;scripts/audit_cohort.py"]
+        L4["master_samples.tsv&lt;br/&gt;patient_id, cancer_type,&lt;br/&gt;HRDsum, purity, ploidy"]
+        L1 --&gt; L4
+        L2 --&gt; L4
+        L3 --&gt; L4
+    end
+
+    A3 --&gt; P1
+    A3 --&gt; L1
+
+    subgraph SPLIT["STAGE 4 — THE LOCK"]
+        S1{"cancer_type in GBM, LGG ?"}
+        S2["LOCKED CNS PARTITION&lt;br/&gt;642 samples&lt;br/&gt;NEVER fitted, NEVER scored&lt;br/&gt;opened exactly once, at the end"]
+        S3["DEVELOPMENT COHORT&lt;br/&gt;30 non-CNS cancer types&lt;br/&gt;7,065 samples"]
+        S1 --&gt;|yes| S2
+        S1 --&gt;|no| S3
+    end
+
+    P3 --&gt; S1
+    L4 --&gt; S1
+
+    subgraph MODEL["STAGE 5 — NESTED LOCO CV  &amp;lt;&amp;lt;&amp;lt; WE ARE HERE &amp;gt;&amp;gt;&amp;gt;"]
+        M1["LSF array kids26_loco[1-30]%4&lt;br/&gt;job 323078995&lt;br/&gt;one task per held-out cancer"]
+        M2["scripts/loco_one_fold.R"]
+        M3["INNER LOOP inside fit_en()&lt;br/&gt;each remaining cancer = one inner fold&lt;br/&gt;leave-one-cancer-out INSIDE&lt;br/&gt;leave-one-cancer-out"]
+        M4["Learned on TRAIN ROWS ONLY (6 quantities)&lt;br/&gt;medians, centres, scales,&lt;br/&gt;variance ranking to 5,000 probes,&lt;br/&gt;lambda path, conformal width"]
+        M5["Tune alpha in 0.1, 0.5, 1&lt;br/&gt;lambda anchored to glmnet lambda.max"]
+        M6["Refit on full fold-train,&lt;br/&gt;score the held-out cancer ONCE"]
+        M7["Per-fold artefacts&lt;br/&gt;metrics_TYPE.tsv, predictions_TYPE.tsv,&lt;br/&gt;nullpanel_TYPE.tsv, loco_TYPE.rds"]
+        M1 --&gt; M2 --&gt; M3 --&gt; M4 --&gt; M5 --&gt; M6 --&gt; M7
+    end
+
+    S3 --&gt; M1
+
+    subgraph WATCH["AUTOMATION (running)"]
+        W1["scripts/watch_loco_array.sh&lt;br/&gt;PID 2386755, polls 300 s"]
+        W2{"EXIT'd index?"}
+        W3["resubmit, max 2 attempts&lt;br/&gt;-n 4, rusage[mem=60GB] PER SLOT"]
+        W4{"all 30 metrics files&lt;br/&gt;present and non-empty?"}
+        W1 --&gt; W2
+        W2 --&gt;|yes| W3 --&gt; W1
+        W2 --&gt;|no| W4
+        W4 --&gt;|no| W1
+    end
+
+    M7 --&gt; W1
+
+    subgraph MERGE["STAGE 6 — POOLED VERDICT (blocked until 30/30)"]
+        G1["scripts/loco_merge.R&lt;br/&gt;REFUSES a partial cohort"]
+        G2["POOLED null panel&lt;br/&gt;skill_vs_tissue_mean&lt;br/&gt;&amp;lt;&amp;lt; THE DECIDING NUMBER &amp;gt;&amp;gt;"]
+        G3["Within-tissue metrics"]
+        G4["Within-tissue permutation&lt;br/&gt;n_perm = 1000"]
+        G5["Purity-stratified controls&lt;br/&gt;cor(pred,purity) within tissue"]
+        G6["lambda_at_boundary count&lt;br/&gt;majority at endpoint = widen path"]
+        G1 --&gt; G2
+        G1 --&gt; G3
+        G1 --&gt; G4
+        G1 --&gt; G5
+        G1 --&gt; G6
+    end
+
+    W4 --&gt;|yes| G1
+
+    subgraph DECIDE["STAGE 7 — THE FORK (not yet reached)"]
+        D1{"pooled skill_vs_tissue_mean &amp;gt; 0 ?"}
+        D2["Model beats the tissue-mean null.&lt;br/&gt;Freeze, then open the CNS lock ONCE."]
+        D3["Model does NOT beat it.&lt;br/&gt;Consistent with having learned&lt;br/&gt;TISSUE LINEAGE, not HRD biology.&lt;br/&gt;Must NOT be presented as an HRD result."]
+        D1 --&gt;|yes| D2
+        D1 --&gt;|no| D3
+    end
+
+    G2 --&gt; D1
+
+    subgraph INFER["STAGE 8 — INFERENCE (gated, B7 closed today)"]
+        I1["scripts/predict_frozen.R"]
+        I2["PROVENANCE GATE — R/provenance.R&lt;br/&gt;runs BEFORE the matrix is read"]
+        I3{"sidecar verdict"}
+        I4["REFUSED: fixture / no sidecar /&lt;br/&gt;no allowlist hash"]
+        I5["Scored, stamped with&lt;br/&gt;matrix_provenance_class + probe_set_match"]
+        I6["app/app.R&lt;br/&gt;validates KIDS26_DEMO_RESULTS&lt;br/&gt;STRUCTURALLY ONLY,&lt;br/&gt;prints provenance verbatim"]
+        I1 --&gt; I2 --&gt; I3
+        I3 --&gt;|fail| I4
+        I3 --&gt;|pass| I5 --&gt; I6
+    end
+
+    D2 --&gt; I1
+
+    style MODEL fill:#fff3cd,stroke:#d39e00,stroke-width:4px
+    style M1 fill:#ffe08a
+    style S2 fill:#f8d7da,stroke:#b02a37,stroke-width:2px
+    style G2 fill:#d1e7dd,stroke:#0f5132,stroke-width:3px
+    style D3 fill:#f8d7da,stroke:#b02a37
+    style I2 fill:#cfe2ff,stroke:#084298,stroke-width:2px</code></pre>
+<hr>
+</section>
+<section id="where-we-are-precisely" class="level2">
+<h2 class="anchored" data-anchor-id="where-we-are-precisely">2. Where we are, precisely</h2>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Stage</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1 Acquisition</td>
+<td>Complete, checksum-verified</td>
+</tr>
+<tr class="even">
+<td>2 Feature prep</td>
+<td>Complete, <code>engineering_only: false</code></td>
+</tr>
+<tr class="odd">
+<td>3 Labels</td>
+<td>Complete</td>
+</tr>
+<tr class="even">
+<td>4 Lock</td>
+<td>Applied; GBM+LGG untouched</td>
+</tr>
+<tr class="odd">
+<td><strong>5 Nested LOCO CV</strong></td>
+<td><strong>RUNNING — 0/30 folds, 4 active, 26 queued</strong></td>
+</tr>
+<tr class="even">
+<td>6 Merge</td>
+<td>Blocked until 30/30</td>
+</tr>
+<tr class="odd">
+<td>7 Fork</td>
+<td>Not reached</td>
+</tr>
+<tr class="even">
+<td>8 Inference</td>
+<td>Code ready, gate closed, nothing scored yet</td>
+</tr>
+</tbody>
+</table>
+<p>Current fold assignment: tasks 1–4 = ACC, BLCA, BRCA, CESC. Measured cost per fold: 55.4 min wall, 173 GB peak, ~1 core busy (memory-bound, not CPU-bound). Four at a time gives roughly 8 h total.</p>
+<hr>
+</section>
+<section id="the-one-number-that-decides-the-project" class="level2">
+<h2 class="anchored" data-anchor-id="the-one-number-that-decides-the-project">3. The one number that decides the project</h2>
+<p><code>skill_vs_tissue_mean</code>, pooled across all 30 folds, written to <code>results/loco_run01/pooled_null_panel.tsv</code>.</p>
+<p>It asks: <strong>does the model beat simply guessing each cancer type’s average HRD score?</strong> If it does not, the model has likely learned to recognise tissue lineage from methylation — which methylation does extremely well — rather than HRD biology. <code>loco_merge.R</code> prints an explicit warning in that case.</p>
+<p>This number <strong>cannot</strong> be computed per fold. Inside one fold every sample is the same cancer type, so the tissue-mean null collapses to that fold’s own mean. Between-tissue variation only exists once folds are pooled. The ACC dry-run figure of −0.22 is therefore <strong>not</strong> evidence of failure; it is a number that does not yet mean anything.</p>
+<hr>
+</section>
+<section id="non-obvious-constraints" class="level2">
+<h2 class="anchored" data-anchor-id="non-obvious-constraints">4. Non-obvious constraints</h2>
+<ul>
+<li><strong><code>rusage[mem]</code> is PER SLOT.</strong> LSF multiplies by <code>-n</code>. <code>60GB × 4 = 240GB</code>. Writing <code>230GB</code> with <code>-n 8</code> requests 1,840 GB, which silently pends forever rather than failing. Cost: one dead array (323078478).</li>
+<li><strong>The biohackathon queue is two nodes</strong>: <code>noderome117</code> (1,003 GB), <code>nodegpu217</code> (1,435 GB). <code>%4</code> fits either.</li>
+<li><strong>336,480 ≠ 384,640.</strong> The allowlist is 384,640; 336,480 is its intersection with probes actually present. Do not interchange these in the writeup.</li>
+<li><strong>Login node <code>nodelmr12</code> has ~3 GB free.</strong> Never load the matrix there.</li>
+<li><strong>Leakage rule.</strong> No feature screening on the full cohort, ever. All six learned quantities come from training rows only; <code>tests/smoke_model.R</code> asserts this executably.</li>
+</ul>
+</section>
+</section>
+
+</main>
+<!-- /main column -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

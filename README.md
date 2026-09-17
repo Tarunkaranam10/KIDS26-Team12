@@ -55,11 +55,24 @@ The demo defaults to prominently labeled synthetic fixtures. To use approved out
 
 - Repository/literature inventory and 70-row evidence matrix: 35 previously reviewed local PDFs, 25 newly reconciled PDFs (including one extra paper), 60 local PDFs total, and 10 unavailable entries with explicit gaps.
 - Actionable public acquisition, publication-header indexing, conservative matching, beta preparation, total-CN proxy features and engineering simulator.
-- R nested elastic-net/frozen inference implementation and Shiny scaffold; **R runtime tests are pending** because R was not available in this environment.
+- R nested elastic-net/frozen inference implementation and Shiny scaffold; R runtime tests **now pass on the cluster** (2026-09-17).
 - Four public label/metadata files and six beta files downloaded/verified; six uniquely matched BRCA specimens; 1000-probe engineering matrix.
 - The team reports the full historical download complete outside the visible repository tree; confirm its 41,541,692,788-byte payload path and checksum before extraction. Only the header fixture was found under KIDS26 on 2026-09-13.
 - 17 Python tests passed. Authoritative GDC project resolution and corrected primary-only duplicate logic retain 7,707 metadata-eligible historical columns across 32 cancers; the former 4,397 result is invalid. Actual interrupted download/resume and idempotent rerun were verified. Full HRD file has 10,647 unique sample IDs and no component-sum mismatches.
-- No trained biological model, raw-IDAT preprocessing bridge, full CNV benchmark, calibrated HRD-high probability or PBTP result yet. See [verification status](docs/14_VERIFICATION_STATUS.md).
+- **A trained biological model now exists (2026-09-17).** LOCO run 01 completed all 30 folds: within-tissue Pearson **0.612** (permutation p = 0.001, 29/30 tissues), but skill over the tissue-mean null is only **+0.085**. The model is a **within-tissue relative ranker**, not an absolute HRD calculator — it mis-levels each tissue by 3.46 units on average. Full results and limitations: [results](docs/24_RESULTS_LOCO_RUN01.md).
+- Still absent: raw-IDAT preprocessing bridge, full CNV benchmark, calibrated HRD-high probability, any CNS or PBTP result. **The locked CNS partition (GBM+LGG, 642 samples) remains unopened.** See [verification status](docs/14_VERIFICATION_STATUS.md).
+
+## Current status (2026-09-17)
+
+| Item | State |
+|---|---|
+| LOCO run 01 (array 323078995) | **Complete**, 30/30 folds, merged 06:20 |
+| Primary estimand E2 (within-tissue) | **Holds**, r = 0.612, p = 0.001 |
+| Secondary estimand E1 (between-tissue) | Weak, skill +0.085 |
+| Open defects gating the CNS unlock | C1 calibration, C2 zero floor, **C3 purity inversion**, C4 OV n=10 |
+| CNS lock | **Closed** — opens once, after C1–C4 |
+
+Read [the pipeline schematic](docs/23_PIPELINE_SCHEMATIC.md) for where each stage stands.
 
 ## Project map
 
