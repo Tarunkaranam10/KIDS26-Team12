@@ -47,8 +47,13 @@
 #     output schema also happens to match exactly what app/app.R accepts via
 #     KIDS26_DEMO_RESULTS, so an unvetted table can flow straight to the demo.
 #     Add the same sidecar check that train_baseline.R performs.
-#   * HRD_high_probability is written as NA for every row. The exploratory
-#     threshold of 42 in config/analysis_protocol.json is read by no R code.
+#   * There is no HRD_high_probability column. It previously existed and was
+#     written as NA for every row; it was removed rather than left as a
+#     placeholder, because an always-NA column implies a validated threshold
+#     exists. The exploratory cut of 42 in config/analysis_protocol.json
+#     describes the TCGA reference distribution and is not a pediatric clinical
+#     threshold. A calibrated probability needs a separately fitted and
+#     validated mapping.
 #     Either wire it up or drop the column - an always-NA field in a
 #     clinical-looking table invites misreading.
 # =============================================================================
@@ -100,8 +105,14 @@ p$estimate_for_display<-ifelse(p$reportable,p$predicted_reference_HRDsum,NA_real
 # calibration quantile is not finite.
 p$lower[!p$reportable|!is.finite(q)]<-NA_real_;p$upper[!p$reportable|!is.finite(q)]<-NA_real_
 
-# Placeholder column - see the KNOWN GAPS note in the header. Always NA.
-p$HRD_high_probability<-NA_real_
+# NOTE: there is deliberately no HRD_high_probability column. An always-NA
+# column invites a reader to assume a validated clinical threshold exists. The
+# exploratory reference cut of 42 in config/analysis_protocol.json is a
+# property of the TCGA reference distribution, not a pediatric clinical
+# threshold, and a point regression prediction cannot be converted into a
+# calibrated probability. Reintroduce this column only when a probability
+# mapping has been fitted on separate calibration data and validated
+# (docs/06_VALIDATION_STRATEGY.md, "Binary secondary").
 
 # Provenance: record which model file produced these numbers so a result can
 # always be traced back to a specific frozen artefact.

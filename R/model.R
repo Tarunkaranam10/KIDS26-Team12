@@ -45,11 +45,9 @@
 #
 # KNOWN LIMITATIONS OF THIS IMPLEMENTATION (audited 2026-09-16)
 # --------------------------------------------------------------
-#   * fit_preprocess() uses apply(z, 2, ...) over ~336k columns. Benchmarked at
-#     roughly 2.8 minutes per call at full scale, and train_baseline.R calls it
-#     ~900 times across nested LOCO -> about 42 hours. Swapping in
-#     matrixStats::colMedians/colVars cuts this to ~17 hours. This is the single
-#     biggest performance blocker in the project.
+#   * RESOLVED 2026-09-16: fit_preprocess() now uses matrixStats compiled
+#     reductions instead of apply(z, 2, ...) over ~336k columns. See the
+#     benchmark note in that function.
 #   * The lambda grid is five hardcoded values spanning four decades and is not
 #     anchored to glmnet's data-derived lambda.max. There is no check that the
 #     selected lambda is interior to the grid, so a boundary optimum would be
@@ -88,32 +86,51 @@ fit_preprocess <- function(x, max_features=5000L, max_missing=0.05) {
   # them here rather than producing a silently mis-aligned matrix later.
   stopifnot(is.matrix(x), !is.null(colnames(x)), !anyDuplicated(colnames(x)))
 
+  # PERFORMANCE: this function previously used apply(z, 2, ...) for the median,
+  # variance and sd passes. apply() coerces column-by-column through R-level
+  # code and benchmarked at ~2.8 min per call at full scale, which across the
+  # ~900 calls of a nested LOCO run came to roughly 42 hours. The matrixStats
+  # equivalents run the same reductions in compiled C. Results are identical;
+  # only the runtime changes. The base-R fallback keeps the file usable without
+  # the dependency.
+  has_ms <- requireNamespace("matrixStats", quietly=TRUE)
+
   # LEARNED QUANTITY 1: the missingness filter.
-  # !is.finite() catches NA, NaN, Inf and -Inf together. colMeans() of that
-  # logical matrix gives the per-probe missing fraction across TRAINING samples.
-  keep <- colMeans(!is.finite(x)) <= max_missing
+  # !is.finite() catches NA, NaN, Inf and -Inf together, giving the per-probe
+  # missing fraction across TRAINING samples. nonfinite is retained rather than
+  # recomputed because it is reused by the imputation step below.
+  nonfinite <- !is.finite(x)
+  keep <- (if (has_ms) matrixStats::colMeans2(nonfinite) else colMeans(nonfinite)) <= max_missing
   if (!any(keep)) stop("No features pass train-only missingness")
-  z <- x[,keep,drop=FALSE]
+  z <- x[,keep,drop=FALSE]; nonfinite <- nonfinite[,keep,drop=FALSE]
 
   # LEARNED QUANTITY 2: per-probe imputation medians, from training rows only.
   # Median rather than mean because beta values are bounded in [0,1] and often
   # strongly bimodal (methylated vs unmethylated), where a mean lands in a
   # trough that no real sample occupies.
   #
-  # CAVEAT: na.rm=TRUE strips NA and NaN but NOT Inf. A column containing Inf
-  # is therefore treated as missing by the mask above while still contributing
-  # Inf to its own median. In practice such a column is removed by the v>0 &
-  # is.finite(v) variance filter below, but the inconsistency is real.
-  med <- apply(z,2,median,na.rm=TRUE)
-  # Impute in place, column by column, using the medians just learned.
-  for (j in seq_len(ncol(z))) z[!is.finite(z[,j]),j] <- med[j]
+  # Setting every non-finite cell to NA first resolves an inconsistency in the
+  # previous implementation: na.rm=TRUE strips NA and NaN but NOT Inf, so a
+  # column containing Inf was treated as missing by the mask above while still
+  # contributing Inf to its own median.
+  any_missing <- any(nonfinite)
+  if (any_missing) z[nonfinite] <- NA_real_
+  med <- if (has_ms) matrixStats::colMedians(z,na.rm=TRUE) else apply(z,2,median,na.rm=TRUE)
+  names(med) <- colnames(z)
+  # Impute only the columns that actually have gaps; on a filtered matrix most
+  # columns have none, so this skips the great majority of the work.
+  if (any_missing) {
+    cols <- which(if (has_ms) matrixStats::colAnys(nonfinite) else apply(nonfinite,2,any))
+    for (j in cols) z[nonfinite[,j],j] <- med[j]
+  }
 
   # LEARNED QUANTITY 3: unsupervised feature selection by variance.
   # This ranks probes by how much they vary across TRAINING samples. It never
   # looks at y, so it is not supervised selection and does not leak the label.
   # Constant probes (v == 0) are dropped because they carry no information and
   # would produce a divide-by-zero at the scaling step below.
-  v <- apply(z,2,var); ii <- which(is.finite(v) & v>0)
+  v <- if (has_ms) matrixStats::colVars(z) else apply(z,2,var)
+  names(v) <- colnames(z); ii <- which(is.finite(v) & v>0)
   # Sort by decreasing variance, breaking ties on probe NAME. The name tie-break
   # makes selection fully deterministic: two probes with identical variance
   # always resolve the same way regardless of column order in the input file.
@@ -124,7 +141,10 @@ fit_preprocess <- function(x, max_features=5000L, max_missing=0.05) {
   # LEARNED QUANTITIES 4: centre and scale, again from training rows only.
   # Because the v>0 filter already ran, every retained column has sd > 0 and the
   # division in apply_preprocess() is safe.
-  z <- z[,ii,drop=FALSE]; mu <- colMeans(z); s <- apply(z,2,sd)
+  z <- z[,ii,drop=FALSE]
+  mu <- if (has_ms) matrixStats::colMeans2(z) else colMeans(z)
+  s  <- if (has_ms) matrixStats::colSds(z)    else apply(z,2,sd)
+  names(mu) <- colnames(z); names(s) <- colnames(z)
 
   # Return the transform. med is subset to the finally-selected features so the
   # stored vectors are all the same length and in the same order as $features.
@@ -531,4 +551,121 @@ within_tissue_metrics <- function(y,pred,cancer) {
              within_Pearson=if(v) cor(yc,pc) else NA_real_,
              within_Spearman=if(v) cor(yc,pc,method="spearman") else NA_real_,
              within_MAE=mean(abs(yc-pc)))
+}
+
+
+# =============================================================================
+# PURITY CONFOUNDING
+# =============================================================================
+# Tumour purity confounds this design through THREE paths at once, which is why
+# it needs its own treatment rather than being folded into the tissue controls:
+#
+#   1. Purity is directly readable from methylation. An observed beta is a
+#      mixture, beta_obs ~= pi*beta_tumour + (1-pi)*beta_normal, so the feature
+#      matrix carries purity information whether or not anyone wants it to.
+#   2. Purity shapes the LABEL. Reference HRDsum comes from SNP6 + ABSOLUTE
+#      segmentation, and low-purity samples yield attenuated, noisier scar
+#      calls.
+#   3. Purity plausibly correlates with scar burden biologically.
+#
+# Paths 1 and 2 together are sufficient for a model to score well by inferring
+# purity from methylation and exploiting purity's correlation with the label.
+# That is a real statistical association and a scientifically empty one.
+#
+# train_baseline.R deliberately excludes purity from the FEATURES. That does not
+# adjust for it - it only makes it unmeasured. These functions measure it.
+#
+# WHY NOT JUST REGRESS PURITY OUT. Purity influences both the features and the
+# label, so naive residualisation can induce bias rather than remove it (see
+# docs/22). Stratification and matching are the primary tools here;
+# residualisation is a sensitivity analysis at most.
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# purity_confound_legs(): does the confounding pathway actually exist?
+# -----------------------------------------------------------------------------
+# Both legs must hold for purity confounding to operate, so test both before
+# worrying about it:
+#
+#   leg 1  predicted HRDsum ~ purity   (does the model's output track purity?)
+#   leg 2  observed  HRDsum ~ purity   (does the label track purity?)
+#
+# Correlations are computed WITHIN cancer type and macro-averaged, because a
+# pooled correlation here would itself be confounded by tissue.
+purity_confound_legs <- function(y,pred,purity,cancer) {
+  ok <- is.finite(y)&is.finite(pred)&is.finite(purity)
+  y<-y[ok];pred<-pred[ok];purity<-purity[ok];cancer<-as.character(cancer)[ok];n<-length(y)
+  empty <- data.frame(n=n,n_types=0L,
+                      cor_pred_purity_within=NA_real_,cor_label_purity_within=NA_real_,
+                      cor_pred_purity_pooled=NA_real_,cor_label_purity_pooled=NA_real_)
+  if(n<3L) return(empty)
+
+  # Per-type Spearman, then macro-average over types with usable variation.
+  per_type <- function(a,b) {
+    vals <- vapply(split(seq_along(a),cancer),function(i) {
+      if(length(i)<3L||sd(a[i])==0||sd(b[i])==0) return(NA_real_)
+      suppressWarnings(cor(a[i],b[i],method="spearman"))
+    },numeric(1))
+    vals[is.finite(vals)]
+  }
+  cpp <- per_type(pred,purity); clp <- per_type(y,purity)
+  pooled_cor <- function(a,b) if(sd(a)>0&&sd(b)>0) suppressWarnings(cor(a,b,method="spearman")) else NA_real_
+
+  data.frame(n=n,n_types=length(unique(cancer)),
+             cor_pred_purity_within=if(length(cpp)) mean(cpp) else NA_real_,
+             cor_label_purity_within=if(length(clp)) mean(clp) else NA_real_,
+             cor_pred_purity_pooled=pooled_cor(pred,purity),
+             cor_label_purity_pooled=pooled_cor(y,purity))
+}
+
+
+# -----------------------------------------------------------------------------
+# purity_stratified_metrics(): is the model only a purity detector?
+# -----------------------------------------------------------------------------
+# Splits samples into purity tertiles (or n_strata quantile bins) and reports
+# the full null panel plus within-tissue agreement inside each one.
+#
+# The pattern to watch for is performance that holds in the high-purity stratum
+# and collapses in the low-purity stratum. That is the signature of a model
+# reading tumour content rather than scar burden. Roughly equal skill across
+# strata is the reassuring result.
+#
+# Strata are cut on quantiles of the observed purity distribution, so bins are
+# balanced by construction rather than by arbitrary cutpoints.
+purity_stratified_metrics <- function(y,pred,purity,cancer,training_mean=NA_real_,n_strata=3L) {
+  ok <- is.finite(y)&is.finite(pred)&is.finite(purity)
+  y<-y[ok];pred<-pred[ok];purity<-purity[ok];cancer<-as.character(cancer)[ok];n<-length(y)
+  if(n<3L*n_strata) return(NULL)
+
+  qs <- unique(quantile(purity,probs=seq(0,1,length.out=n_strata+1L),names=FALSE))
+  if(length(qs)<3L) return(NULL)   # too little variation to stratify
+  bin <- cut(purity,breaks=qs,include.lowest=TRUE,labels=FALSE)
+
+  do.call(rbind,lapply(sort(unique(bin)),function(b) {
+    i <- which(bin==b)
+    np <- null_panel(y[i],pred[i],cancer[i],training_mean)
+    wt <- within_tissue_metrics(y[i],pred[i],cancer[i])
+    data.frame(purity_stratum=b,
+               purity_min=min(purity[i]),purity_median=median(purity[i]),purity_max=max(purity[i]),
+               np,within_Pearson=wt$within_Pearson,within_Spearman=wt$within_Spearman,
+               row.names=NULL)
+  }))
+}
+
+
+# -----------------------------------------------------------------------------
+# purity_matched_subset(): sensitivity analysis on a narrow purity band.
+# -----------------------------------------------------------------------------
+# Restricting to a narrow band removes most purity variation, so if the signal
+# survives it is unlikely to be purity-driven. Power drops - that is expected
+# and is why this is a sensitivity analysis, not the primary result. Judge the
+# DIRECTION of the estimate, not its significance.
+purity_matched_subset <- function(y,pred,purity,cancer,lower=0.5,upper=0.8,training_mean=NA_real_) {
+  i <- which(is.finite(purity)&purity>=lower&purity<=upper&is.finite(y)&is.finite(pred))
+  if(length(i)<10L) return(NULL)
+  cancer <- as.character(cancer)
+  cbind(data.frame(purity_band=paste0("[",lower,",",upper,"]"),n_retained=length(i)),
+        null_panel(y[i],pred[i],cancer[i],training_mean),
+        within_tissue_metrics(y[i],pred[i],cancer[i])[,c("within_Pearson","within_Spearman")])
 }

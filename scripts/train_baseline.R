@@ -281,6 +281,43 @@ if(is.finite(pooled_null$skill_vs_tissue_mean)&&pooled_null$skill_vs_tissue_mean
   message("WARNING: the model does NOT beat the tissue-mean null. Consistent with the model ",
           "having learned tissue lineage rather than HRD biology; do not present this as an HRD result.")
 
+# --- Purity confounding -----------------------------------------------------
+# Purity is excluded from the features but is NOT thereby adjusted for. It is
+# readable from methylation AND shapes the ABSOLUTE-derived label, so a model
+# can score well by inferring purity and exploiting its correlation with the
+# outcome. These analyses measure whether that is happening. See docs/22.
+if("purity" %in% names(meta)) {
+  pur <- meta$purity[match(pooled$patient_id,meta$patient_id)]
+  n_pur <- sum(is.finite(pur))
+  message(sprintf("purity available for %d of %d pooled predictions",n_pur,nrow(pooled)))
+
+  if(n_pur>=30L) {
+    legs <- purity_confound_legs(pooled$actual,pooled$predicted_reference_HRDsum,pur,pooled$cancer_type)
+    write.table(legs,file.path(out,"pooled_purity_confound_legs.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+    ps <- purity_stratified_metrics(pooled$actual,pooled$predicted_reference_HRDsum,pur,
+                                    pooled$cancer_type,mean(meta$HRDsum[!cns]))
+    if(!is.null(ps)) write.table(ps,file.path(out,"pooled_purity_stratified.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+    pm <- purity_matched_subset(pooled$actual,pooled$predicted_reference_HRDsum,pur,
+                                pooled$cancer_type,training_mean=mean(meta$HRDsum[!cns]))
+    if(!is.null(pm)) write.table(pm,file.path(out,"pooled_purity_matched.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+    # Both legs must hold for the confound to operate; report them together so
+    # the pathway is judged as a whole rather than from one suggestive number.
+    message(sprintf("PURITY  cor(pred,purity)_within=%.3f  cor(label,purity)_within=%.3f",
+                    legs$cor_pred_purity_within,legs$cor_label_purity_within))
+    if(!is.null(ps)&&nrow(ps)>1L) {
+      rng <- range(ps$skill_vs_tissue_mean[is.finite(ps$skill_vs_tissue_mean)])
+      if(length(rng)==2L) message(sprintf("PURITY  skill_vs_tissue_mean across strata: %.3f to %.3f",rng[1],rng[2]))
+    }
+  } else {
+    message("Too few finite purity values for stratified analysis; skipping.")
+  }
+} else {
+  message("No purity column in master table; purity confounding NOT assessed.")
+}
+
 # ===========================================================================
 # PHASE 2: Fit and freeze the final model, with a conformal interval
 # ===========================================================================
