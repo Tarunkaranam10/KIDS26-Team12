@@ -120,12 +120,48 @@ if(any(!is.finite(meta$HRDsum))||any(meta$HRDsum<0)) stop("Invalid target")
 # silently train the model against a scrambled target.
 if(!all(abs(meta$HRDsum-meta$HRD_LOH-meta$LST-meta$TAI)<1e-6)) stop("Label sum mismatch")
 
-# WARNING - THIS GATE IS CURRENTLY TAUTOLOGICAL.
-# scripts/build_master.py writes quality_annotation as a hardcoded constant
-# string for every row, so this condition can never be false. It reads like a QC
-# check but verifies nothing. Replace it with a real provenance assertion (for
-# example, comparing a recorded source checksum) if you want an actual gate.
-if (!all(meta$quality_annotation=="published_450K_no_exclusion")) stop("Unadjudicated QC")
+# --- QC gate ----------------------------------------------------------------
+# The previous version of this gate compared quality_annotation against the
+# constant string build_master.py writes for every row, so it could never fail.
+# A gate that cannot fail is worse than no gate: it puts a reassuring line in
+# the audit trail while verifying nothing.
+#
+# The replacement asserts properties that can actually be violated. Each check
+# is separate so a failure names the specific problem.
+
+# 1. The column must exist and be fully populated.
+if(!"quality_annotation" %in% names(meta)) stop("Missing quality_annotation column")
+if(any(is.na(meta$quality_annotation)|!nzchar(trimws(as.character(meta$quality_annotation)))))
+  stop("Blank quality_annotation for ",
+       sum(is.na(meta$quality_annotation)|!nzchar(trimws(as.character(meta$quality_annotation)))),
+       " specimens")
+
+# 2. Every annotation must be one the pipeline knows how to interpret. An
+#    unrecognised value means build_master.py changed and this gate was not
+#    revisited - stop rather than guess what it meant.
+known_qc <- c("published_450K_no_exclusion","qc_pass","qc_pass_reviewed")
+if(!all(meta$quality_annotation %in% known_qc))
+  stop("Unrecognised quality_annotation value(s): ",
+       paste(sort(unique(meta$quality_annotation[!meta$quality_annotation %in% known_qc])),collapse=", "))
+
+# 3. The real risk this gate guards against: silently training on a cohort
+#    whose QC was never adjudicated per specimen. If every row carries the
+#    identical blanket annotation, no per-sample QC decision was made, so warn
+#    loudly and record it rather than presenting the run as QC-gated.
+#    Set KIDS26_REQUIRE_ADJUDICATED_QC=1 to make this fatal.
+qc_is_blanket <- length(unique(meta$quality_annotation))==1L
+if(qc_is_blanket) {
+  msg <- paste0("Blanket quality_annotation ('",meta$quality_annotation[1],
+                "') on all ",nrow(meta)," specimens: no per-sample QC adjudication is recorded. ",
+                "Array-level QC (detection p-value pass rate, sex concordance, duplicate audit) ",
+                "has NOT gated this cohort. See docs/16_COHORT_QC.md.")
+  if(nzchar(Sys.getenv("KIDS26_REQUIRE_ADJUDICATED_QC"))) stop(msg)
+  warning(msg,call.=FALSE);message("WARNING: ",msg)
+}
+
+# 4. Partition bookkeeping must be internally consistent where present.
+if("partition" %in% names(meta) && any(is.na(meta$partition)))
+  stop("Missing partition assignment for ",sum(is.na(meta$partition))," specimens")
 
 # --- Provenance gate: refuse to train on a smoke fixture --------------------
 # scripts/prepare_beta.py writes a sidecar <matrix_basename>.provenance.json
@@ -165,7 +201,7 @@ if(sum(!cns)<50) stop("Need >=50 development patients for this protocol; do not 
 # has learned something transferable about HRD biology, or has merely learned
 # tissue-specific methylation signatures. Holding out random SAMPLES instead
 # would let the model recognise the tissue and look far better than it is.
-all_predictions <- list();all_metrics<-list()
+all_predictions <- list();all_metrics<-list();all_nulls<-list()
 for (type in sort(unique(meta$cancer_type[!cns]))) {
  # Both masks carry !cns, so locked CNS samples appear in neither train nor test.
  tr <- !cns & meta$cancer_type!=type;te <- !cns & meta$cancer_type==type
@@ -187,6 +223,13 @@ for (type in sort(unique(meta$cancer_type[!cns]))) {
  mm<-metrics(p$actual,p$predicted_reference_HRDsum);mm$cancer_type<-type;mm$train_n<-sum(tr);mm$selected_features<-length(b$preprocess$features);mm$alpha<-b$alpha;mm$lambda<-b$lambda;mm$null_MAE<-mean(abs(p$actual-b$training_mean));mm$abstention_rate<-mean(!p$reportable)
  all_metrics[[type]]<-mm
 
+ # Within-fold null panel. Every sample here shares one cancer type, so the
+ # tissue-mean null collapses to this fold's own mean - a strict bar, but it
+ # says nothing about the between-tissue confound. The pooled analysis after
+ # the loop is where that becomes visible.
+ np<-null_panel(p$actual,p$predicted_reference_HRDsum,p$cancer_type,b$training_mean)
+ np$cancer_type<-type;all_nulls[[type]]<-np
+
  # Persist the per-fold bundle and inner-fold assignments so the grid search and
  # fold structure remain auditable after the run.
  saveRDS(b,file.path(out,paste0("loco_",type,".rds")))
@@ -200,6 +243,45 @@ mt<-do.call(rbind,all_metrics);write.table(mt,file.path(out,"loco_metrics.tsv"),
 writeLines(paste("macro_MAE",mean(mt$MAE)),file.path(out,"macro_metrics.txt"))
 
 # ===========================================================================
+# POOLED CONFOUNDING CONTROLS
+# ===========================================================================
+# Everything above is per-fold, where each fold is one cancer type and the
+# tissue-mean null therefore collapses to that fold's own mean. Pooling all
+# held-out predictions restores the between-tissue variation, which is the only
+# way the tissue confound becomes visible.
+#
+# The decisive question: does the model beat an opponent that knows ONLY each
+# sample's cancer type and that type's average HRDsum? If not, the model has
+# learned tissue lineage rather than HRD biology, and no other result in this
+# run should be presented as evidence of the latter. See docs/22.
+pooled<-do.call(rbind,all_predictions)
+write.table(do.call(rbind,all_nulls),file.path(out,"loco_null_panel_by_cancer.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+pooled_null <- null_panel(pooled$actual,pooled$predicted_reference_HRDsum,
+                          pooled$cancer_type,mean(meta$HRDsum[!cns]))
+write.table(pooled_null,file.path(out,"pooled_null_panel.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+# E2: the within-tissue estimand, with both outcome and prediction centered by
+# cancer type. A model whose entire skill is tissue-level offsets scores ~0.
+pooled_within <- within_tissue_metrics(pooled$actual,pooled$predicted_reference_HRDsum,pooled$cancer_type)
+write.table(pooled_within,file.path(out,"pooled_within_tissue_metrics.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+# Permutation null for E2. Predictions are held fixed and the outcome is
+# shuffled within tissue, so this asks whether the within-tissue ordering
+# carries information - NOT whether the pipeline could manufacture it from
+# noise, which would require refitting per permutation.
+pooled_perm <- permutation_test_within_tissue(pooled$actual,pooled$predicted_reference_HRDsum,
+                                              pooled$cancer_type,n_perm=1000L)
+write.table(pooled_perm,file.path(out,"pooled_within_tissue_permutation.tsv"),sep="\t",row.names=FALSE,quote=FALSE)
+
+# Surface the decisive comparison in the run log so it cannot be overlooked.
+message(sprintf("POOLED  MAE_model=%.3f  MAE_tissue_mean_null=%.3f  skill_vs_tissue_mean=%.3f",
+                pooled_null$MAE_model,pooled_null$MAE_tissue_mean_null,pooled_null$skill_vs_tissue_mean))
+if(is.finite(pooled_null$skill_vs_tissue_mean)&&pooled_null$skill_vs_tissue_mean<=0)
+  message("WARNING: the model does NOT beat the tissue-mean null. Consistent with the model ",
+          "having learned tissue lineage rather than HRD biology; do not present this as an HRD result.")
+
+# ===========================================================================
 # PHASE 2: Fit and freeze the final model, with a conformal interval
 # ===========================================================================
 # Deterministic calibration reservation within non-CNS cancers; no refit on calibration.
@@ -208,15 +290,25 @@ writeLines(paste("macro_MAE",mean(mt$MAE)),file.path(out,"macro_metrics.txt"))
 # cohort's tissue composition rather than being dominated by the largest cancers.
 # The seed makes the split reproducible.
 #
-# LATENT BUG: sample(ii, k) where ii has length 1 is interpreted by R as
-# sample(1:ii, k) - it returns a random integer in 1..ii rather than ii itself.
-# That stray index would point at an arbitrary row (possibly a locked_CNS one).
-# It does not fire on the current cohort because the smallest development group
-# is OV with n=10 (floor(10*0.2) = 2), but it will fire on any subset or
-# re-partition that produces a singleton group. Fix with an explicit
-# length(ii)==1L guard.
-set.seed(260910);dev<-which(!cns);cal<-unlist(lapply(split(dev,meta$cancer_type[dev]),function(ii) sample(ii,max(1L,floor(length(ii)*0.2)))))
+# FIXED: sample(ii, k) where ii has length 1 is interpreted by R as
+# sample(1:ii, k) - it returns a random integer in 1..ii rather than ii itself,
+# which would point at an arbitrary row (possibly a locked_CNS one). It did not
+# fire on the current cohort because the smallest development group is OV with
+# n=10, but it would fire on any subset or re-partition producing a singleton
+# group. sample.int(length(ii)) is length-safe: for length 1 it yields index 1,
+# so ii[1] is returned as intended.
+pick_calibration <- function(ii) {
+  k <- max(1L,floor(length(ii)*0.2))
+  ii[sample.int(length(ii),k)]
+}
+set.seed(260910);dev<-which(!cns)
+cal<-unlist(lapply(split(dev,meta$cancer_type[dev]),pick_calibration),use.names=FALSE)
+
+# Assert the reservation is sane before anything depends on it: calibration
+# rows must be development rows, distinct, and must not exhaust any group.
+stopifnot(!anyDuplicated(cal),all(cal %in% dev),!any(cns[cal]))
 tr<-setdiff(dev,cal)
+if(!length(tr)) stop("Calibration reservation consumed every development sample")
 
 # Fit on development-minus-calibration only. The calibration samples must stay
 # unseen or the conformal interval below loses its validity guarantee.

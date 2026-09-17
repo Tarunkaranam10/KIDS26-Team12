@@ -54,11 +54,17 @@
 #     anchored to glmnet's data-derived lambda.max. There is no check that the
 #     selected lambda is interior to the grid, so a boundary optimum would be
 #     accepted silently.
-#   * The only null comparator produced downstream is the training mean. There
-#     is no permuted-label control and no tissue-identity (cancer-type-mean)
-#     control anywhere in the repository. Until those exist, a good-looking
-#     result cannot be distinguished from the model having learned tissue
-#     lineage rather than HRD biology.
+#   * Tissue and permutation controls now exist at the bottom of this file
+#     (tissue_mean_null, permute_within_tissue, permutation_test_within_tissue,
+#     null_panel, within_tissue_metrics) and are wired into train_baseline.R.
+#     They are necessary but not sufficient: the permutation test reuses the
+#     fitted predictions rather than refitting on permuted labels, so it asks
+#     "do these predictions track the outcome within tissue better than chance"
+#     and NOT "could the whole pipeline manufacture this from noise". The
+#     refit-based version is the stronger control and is still outstanding.
+#   * Purity and ploidy remain excluded from the feature set. Excluding a
+#     confounder does not adjust for it; see docs/22 for the stratified and
+#     purity-matched analyses that do.
 # =============================================================================
 
 
@@ -375,4 +381,154 @@ metrics <- function(y,p) {
              Pearson=if(variable) cor(y,p) else NA,Spearman=if(variable) cor(y,p,method="spearman") else NA,
              # bias is signed mean error: positive means systematic over-prediction.
              calibration_intercept=unname(cal[1]),calibration_slope=unname(cal[2]),bias=mean(p-y))
+}
+
+
+# =============================================================================
+# TISSUE AND PERMUTATION CONTROLS
+# =============================================================================
+# Methylation is among the strongest tissue-of-origin signals in genomics, and
+# HRDsum varies substantially BY cancer type. A model handed ~336k CpGs and a
+# tissue-correlated outcome can therefore score well by learning lineage and
+# nothing about HRD biology. Leave-one-cancer-out does not prevent this: it
+# stops the model memorising a held-out type's mean, but not from reasoning
+# "this looks squamous, squamous tumours score around X".
+#
+# The controls below separate two distinct estimands (see docs/22):
+#
+#   E1 between-tissue : can the model rank cancer TYPES by typical scar burden?
+#   E2 within-tissue  : given two tumours OF THE SAME TYPE, can it tell which
+#                       has the higher burden?
+#
+# E2 is the clinically meaningful question and the one an N-of-1 pediatric
+# application actually requires. A pooled metric silently averages the two.
+#
+# SCOPE WARNING. Within a single LOCO fold every sample shares one cancer type,
+# so tissue_mean_null() collapses to that fold's own mean and within-tissue
+# centering collapses to plain centering. Per-fold output from these functions
+# is still meaningful, but the between-tissue confound only becomes visible
+# when predictions from ALL folds are POOLED and then compared against the
+# tissue-mean null. Run them both ways.
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# tissue_mean_null(): the decisive null comparator.
+# -----------------------------------------------------------------------------
+# Returns, for each sample, the mean outcome of its OWN cancer type. This is an
+# oracle - it uses labels unavailable at deployment - which is exactly the point.
+# If the model cannot beat an opponent that knows nothing except the tissue's
+# average, then the model has learned tissue lineage, not HRD biology.
+#
+# Note this is the same baseline the R2 in metrics() already uses per fold; the
+# function makes it explicit, available on MAE, and usable on pooled data.
+tissue_mean_null <- function(y,cancer) {
+  stopifnot(length(y)==length(cancer))
+  cancer <- as.character(cancer)
+  mu <- tapply(y,cancer,function(v) mean(v[is.finite(v)]))
+  as.numeric(mu[cancer])
+}
+
+
+# -----------------------------------------------------------------------------
+# permute_within_tissue(): shuffle the outcome WITHIN each cancer type.
+# -----------------------------------------------------------------------------
+# Permuting globally would also destroy tissue structure, producing a null so
+# weak that any lineage-aware model beats it trivially. Permuting within tissue
+# holds the between-tissue signal fixed and asks only whether the within-tissue
+# ordering carries information - the correct null for E2.
+#
+# The length(i) > 1L guard is deliberate: sample() on a length-1 vector would
+# reinterpret it as sample(1:x, ...) and return an arbitrary index.
+permute_within_tissue <- function(y,cancer,seed=NULL) {
+  if(!is.null(seed)) set.seed(seed)
+  cancer <- as.character(cancer);out <- y
+  for(g in unique(cancer)) {
+    i <- which(cancer==g)
+    if(length(i)>1L) out[i] <- y[i][sample.int(length(i))]
+  }
+  out
+}
+
+
+# -----------------------------------------------------------------------------
+# permutation_test_within_tissue(): is within-tissue agreement above chance?
+# -----------------------------------------------------------------------------
+# Holds the fitted predictions fixed and permutes the observed outcome within
+# tissue n_perm times, building a null distribution of MAE.
+#
+# WHAT THIS DOES NOT TEST. Because predictions are not recomputed, this cannot
+# detect a pipeline that manufactures signal from noise (that requires refitting
+# on permuted labels, which costs a full LOCO run per permutation). Treat a
+# small p-value as "these predictions carry within-tissue information", not as
+# "the pipeline is leakage-free".
+#
+# p-value uses the standard (1 + #{as extreme}) / (n_perm + 1) form, which is
+# never zero and stays valid for small n_perm.
+permutation_test_within_tissue <- function(y,pred,cancer,n_perm=1000L,seed=260910L) {
+  ok <- is.finite(y)&is.finite(pred)
+  y<-y[ok];pred<-pred[ok];cancer<-as.character(cancer)[ok];n<-length(y)
+  empty <- data.frame(n=n,observed_MAE=NA_real_,null_MAE_median=NA_real_,
+                      null_MAE_q05=NA_real_,perm_p_value=NA_real_,n_perm=0L)
+  if(n<3L) return(empty)
+
+  # A permutation is only informative where some tissue has >1 sample.
+  if(!any(table(cancer)>1L)) return(empty)
+
+  obs <- mean(abs(y-pred));set.seed(seed)
+  null_mae <- vapply(seq_len(n_perm),
+                     function(k) mean(abs(permute_within_tissue(y,cancer)-pred)),
+                     numeric(1))
+  # Lower MAE is better, so "at least as extreme" means at least as SMALL.
+  data.frame(n=n,observed_MAE=obs,null_MAE_median=median(null_mae),
+             null_MAE_q05=as.numeric(quantile(null_mae,0.05,names=FALSE)),
+             perm_p_value=(1+sum(null_mae<=obs))/(n_perm+1),
+             n_perm=as.integer(n_perm))
+}
+
+
+# -----------------------------------------------------------------------------
+# null_panel(): model against both nulls, side by side.
+# -----------------------------------------------------------------------------
+# skill = 1 - MAE_model / MAE_null. Positive means the model beats that null;
+# zero means it matches it; negative means it is worse than predicting the mean.
+#
+# skill_vs_tissue_mean is the number to lead with. skill_vs_training_mean is the
+# weaker, more flattering comparison and should never be quoted alone.
+null_panel <- function(y,pred,cancer,training_mean=NA_real_) {
+  ok <- is.finite(y)&is.finite(pred)
+  y<-y[ok];pred<-pred[ok];cancer<-as.character(cancer)[ok];n<-length(y)
+  if(!n) return(data.frame(n=0L,MAE_model=NA_real_,MAE_tissue_mean_null=NA_real_,
+                           MAE_training_mean_null=NA_real_,
+                           skill_vs_tissue_mean=NA_real_,skill_vs_training_mean=NA_real_))
+  mae_model  <- mean(abs(y-pred))
+  mae_tissue <- mean(abs(y-tissue_mean_null(y,cancer)))
+  mae_train  <- if(is.finite(training_mean)) mean(abs(y-training_mean)) else NA_real_
+  data.frame(n=n,MAE_model=mae_model,MAE_tissue_mean_null=mae_tissue,
+             MAE_training_mean_null=mae_train,
+             skill_vs_tissue_mean=if(mae_tissue>0) 1-mae_model/mae_tissue else NA_real_,
+             skill_vs_training_mean=if(is.finite(mae_train)&&mae_train>0) 1-mae_model/mae_train else NA_real_)
+}
+
+
+# -----------------------------------------------------------------------------
+# within_tissue_metrics(): the E2 estimand in isolation.
+# -----------------------------------------------------------------------------
+# Centers BOTH the outcome and the prediction by cancer type, removing each
+# tissue's offset, then measures agreement on what remains. Centering the
+# prediction as well as the outcome is what makes this a within-tissue question:
+# a model whose entire skill is tissue-level offsets scores ~0 here.
+#
+# Spearman is the more robust summary if the relationship is monotone but not
+# linear, which is plausible for a bounded scar score.
+within_tissue_metrics <- function(y,pred,cancer) {
+  ok <- is.finite(y)&is.finite(pred)
+  y<-y[ok];pred<-pred[ok];cancer<-as.character(cancer)[ok];n<-length(y)
+  if(n<3L) return(data.frame(n=n,within_Pearson=NA_real_,within_Spearman=NA_real_,within_MAE=NA_real_))
+  yc <- y-tissue_mean_null(y,cancer);pc <- pred-tissue_mean_null(pred,cancer)
+  v <- sd(yc)>0 && sd(pc)>0
+  data.frame(n=n,
+             within_Pearson=if(v) cor(yc,pc) else NA_real_,
+             within_Spearman=if(v) cor(yc,pc,method="spearman") else NA_real_,
+             within_MAE=mean(abs(yc-pc)))
 }
