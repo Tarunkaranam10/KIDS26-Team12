@@ -1,6 +1,34 @@
 # 22. Confounding and Pan-Cancer Validity Plan
 
-Status date: 2026-09-16. This plan addresses four entangled threats to the
+Status date: 2026-09-16. **Outcome recorded 2026-09-17 — see the box below.**
+
+> ## OUTCOME: this plan's central prediction was correct
+>
+> LOCO run 01 (array `323078995`, n = 7,065, 30/30 folds) produced exactly the
+> split this document anticipated. Full results: `docs/24_RESULTS_LOCO_RUN01.md`.
+>
+> | Estimand | Measured | Reading |
+> |---|---|---|
+> | **E1 (between-tissue)** | skill vs tissue-mean null = **+0.085** | Weak. Barely beats guessing each type's average. |
+> | **E2 (within-tissue)** | Pearson **0.612**, permutation **p = 0.001** | Holds, in 29 of 30 tissues. |
+>
+> The recommendation below — *declare E2 the primary estimand and report E1
+> separately* — is hereby **adopted as binding**. Had this document not
+> pre-specified the split, the pooled +0.085 would most likely have been read as
+> "the model barely works," when in fact it ranks patients within a tissue at
+> r = 0.61 and merely mis-levels each tissue by 3.46 units on average.
+>
+> The warning that *"a pooled metric that silently averages the two is the single
+> most likely way this project overstates its result"* proved half right, and in
+> the more interesting direction: the pooled metric **understated** the usable
+> signal, because the per-tissue offset error (E1 failure) swamped the E2 success.
+>
+> **Purity, however, went the wrong way.** §3's concern is now the project's most
+> serious open defect (C3 in `docs/21`): `cor(pred, purity)` within tissue is
+> 0.165 against `cor(label, purity)` of 0.019, and model skill is **negative**
+> in the highest-purity third of samples. This is not yet explained.
+
+This plan addresses four entangled threats to the
 central claim: **tissue lineage**, **tumor purity**, **copy-number estimation**,
 and whether the classifier is genuinely *pan*-cancer. These are not four
 independent problems. They share a common structure, and treating them

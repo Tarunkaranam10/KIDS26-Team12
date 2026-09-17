@@ -1,12 +1,28 @@
 # 21. Blocker Resolution Plan
 
-Status date: 2026-09-16. This document consolidates every known blocker into an
-ordered, owner-assignable plan. Blockers are grouped by whether they gate the
-*first real result* (P0), gate *credible claims* (P1), or gate *deployment and
-handoff* (P2). Nothing here asserts a result that has been produced.
+Status date: **2026-09-17** (was 2026-09-16). This document consolidates every
+known blocker into an ordered, owner-assignable plan. Blockers are grouped by
+whether they gate the *first real result* (P0), gate *credible claims* (P1),
+gate *model quality* (P1.5, new), or gate *deployment and handoff* (P2).
 
-The single most important fact: **no biological model has been fit yet.** Every
-performance statement in this repository is currently a plan, not a finding.
+**CHANGED 2026-09-17 — the headline fact is no longer true.** The previous
+version of this document stated: *"no biological model has been fit yet. Every
+performance statement in this repository is currently a plan, not a finding."*
+
+That is now superseded. LOCO run 01 (array `323078995`) completed all 30 folds
+and merged on 2026-09-17 at 06:20. **A real result exists** and is recorded in
+`docs/24_RESULTS_LOCO_RUN01.md`.
+
+| Ledger change | Detail |
+|---|---|
+| B4 → **CLOSED** | 173 GB measured peak vs 240 GB reserved |
+| B3 → **CLOSED** | 30/30 folds in 6.7 h wall |
+| B7 → **RESOLVED** | provenance gate, commit `696e05e` |
+| **C1–C4 added** | new P1.5 section — model-quality defects found by run 01 |
+| Critical path | rewritten; old path complete |
+
+Performance statements about the *locked CNS partition* and about *pediatric
+transfer* remain plans, not findings. The lock is still closed.
 
 ---
 
@@ -202,7 +218,7 @@ full run is scheduled within the event window.
 
 ---
 
-### B4. Memory ceiling on matrix load
+### B4. Memory ceiling on matrix load — **CLOSED 2026-09-17**
 
 **Symptom.** `scripts/train_baseline.R` lines 33–72: ~21 GB for `fread()`, 60+ GB
 peak through the transpose chain.
@@ -210,6 +226,15 @@ peak through the transpose chain.
 **Resolution.** Request a large-memory queue; subset to the 384,640-probe
 allowlist *during* read rather than after; avoid retaining intermediate copies;
 consider `data.table::setDT` in-place transforms. Record peak RSS.
+
+> **Closed by measurement.** All 30 array tasks completed with **173 GB peak RSS**
+> against a 240 GB reservation (`-n 4` × `rusage[mem=60GB]` per slot), a 28%
+> headroom margin. Zero OOM kills, zero EXIT'd tasks across the full array.
+> The earlier 75 GB estimate in the schematic was low; 173 GB is the measured
+> figure and is what future reservations should be sized against.
+>
+> Note this is the *in-loop* peak, not the `train_baseline.R` serial path, which
+> remains unmeasured but is superseded by the array for Phase 1 work.
 
 ---
 
@@ -355,29 +380,117 @@ raw IDATs enter the pipeline; currently level-3 betas are used.
 
 ## Suggested execution order
 
-Status as of 2026-09-16: **B1, B8 and B9 are resolved; B3 and B6 are mitigated.**
-The remaining gate before a first real result is B2 (R runtime end-to-end on the
-cluster), which the single-fold dry run exercises directly.
+Status as of 2026-09-17: **B1, B2, B5, B6, B7, B8 and B9 are RESOLVED; B3 and
+B4 are MITIGATED and closed in practice.** The 30-fold LOCO array (`323078995`)
+completed and merged; results are in `docs/24_RESULTS_LOCO_RUN01.md`.
+
+The first real result exists. The remaining work is no longer blocker removal —
+it is the **four model-quality defects** that run 01 exposed (C1–C4 below),
+which gate opening the CNS lock.
 
 ```mermaid
 graph TD
-    B1[B1 locate + checksum matrix<br/>RESOLVED] --> B4[B4 memory-safe load<br/>measured 75 GB peak]
-    B2[B2 R runtime + smoke tests<br/>dry run in progress] --> B3[B3 matrixStats + LSF array<br/>MITIGATED]
+    B1["B1 locate + checksum matrix<br/>RESOLVED"] --> B4["B4 memory-safe load<br/>CLOSED: 173 GB measured<br/>vs 240 GB reserved"]
+    B2["B2 R runtime + smoke tests<br/>RESOLVED on cluster"] --> B3["B3 matrixStats + LSF array<br/>CLOSED: 30/30 folds in 6.7 h"]
     B4 --> B3
-    B3 --> FIT[First real LOCO fit]
-    B5[B5 real QC gate<br/>RESOLVED, warns on blanket QC] --> FIT
-    B6[B6 sample bug<br/>FIXED] --> FIT
-    FIT --> CONF[Confounding controls: tissue + purity<br/>wired into loco_merge.R]
-    CONF --> B7[B7 inference provenance]
-    B7 --> B10[B10 app governance]
-    B11[B11 PBTP EPIC] --> TRANSFER[Pediatric transfer]
+    B5["B5 real QC gate<br/>RESOLVED"] --> FIT
+    B6["B6 sample bug<br/>FIXED"] --> FIT
+    B3 --> FIT["LOCO run 01 COMPLETE<br/>array 323078995, n=7065<br/>30/30 folds, 0 boundary hits"]
+    FIT --> CONF["Confounding controls RUN<br/>tissue + purity + permutation"]
+    CONF --> VERDICT{"Tissue confound<br/>disqualifying?"}
+    VERDICT -->|"NO — within-tissue r=0.61,<br/>perm p=0.001, 29/30 tissues"| CONTINUE["CONTINUE MODELLING<br/>reframed as within-tissue ranker"]
+
+    CONTINUE --> C1["C1 per-tissue calibration<br/>OPEN — worth 1.17 MAE"]
+    CONTINUE --> C2["C2 zero floor / log1p<br/>OPEN — 14.3% of y are 0"]
+    CONTINUE --> C3["C3 purity inversion<br/>OPEN — skill NEGATIVE at high purity"]
+    CONTINUE --> C4["C4 OV n=10 disclosure<br/>OPEN — 27k array excluded"]
+
+    C1 --> LOCK
+    C2 --> LOCK
+    C3 --> LOCK
+    C4 --> LOCK
+    LOCK["CNS LOCK — still closed<br/>opens ONCE, after C1-C4"]
+
+    B7["B7 inference provenance<br/>RESOLVED 2026-09-16"] --> B10["B10 app governance<br/>OPEN, P2"]
+    LOCK --> B10
+    B11["B11 PBTP EPIC<br/>OPEN"] --> TRANSFER["Pediatric transfer"]
+    B10 --> TRANSFER
 
     style B1 fill:#d4edda
+    style B2 fill:#d4edda
+    style B3 fill:#d4edda
+    style B4 fill:#d4edda
     style B5 fill:#d4edda
     style B6 fill:#d4edda
-    style B3 fill:#fff3cd
+    style B7 fill:#d4edda
+    style FIT fill:#d4edda,stroke:#0f5132,stroke-width:3px
+    style CONF fill:#d4edda
+    style CONTINUE fill:#d1e7dd,stroke:#0f5132,stroke-width:3px
+    style C1 fill:#fff3cd,stroke:#d39e00
+    style C2 fill:#fff3cd,stroke:#d39e00
+    style C3 fill:#f8d7da,stroke:#b02a37,stroke-width:2px
+    style C4 fill:#fff3cd,stroke:#d39e00
+    style LOCK fill:#f8d7da,stroke:#b02a37,stroke-width:2px
+    style B10 fill:#fff3cd
+    style B11 fill:#fff3cd
 ```
 
-The critical path is now: dry run one fold (B2) -> launch the 30-task array ->
-`loco_merge.R` -> read the pooled tissue-mean null. **That last step decides
-whether there is a result worth reporting at all** (docs/22).
+**Critical path is now:** fix C1–C4 → re-run the array → confirm skill improves
+→ freeze → open the CNS lock **once** → B10 app governance → pediatric transfer.
+
+---
+
+## P1.5 — Model-quality defects exposed by run 01 (NEW 2026-09-17)
+
+These are not blockers in the original sense (nothing is broken or unverifiable);
+they are substantive modelling defects measured in `docs/24_RESULTS_LOCO_RUN01.md`.
+
+### C1. Per-tissue calibration offset — **OPEN**
+
+Mean absolute per-tissue offset is 3.46 HRD units (SD 4.83, range −15.44 to
++8.29). Removing it drops pooled MAE 9.049 → 7.881. This single defect costs
+more than the model's entire margin over the tissue-mean null (+0.085).
+
+**Resolution.** Fit a per-tissue offset **inside** the LOCO loop, on training
+tissues only. Fitting it on the held-out tissue is leakage and voids the fold.
+Note the unresolved question this raises: a held-out tissue has no offset to
+apply, which is precisely the pediatric-transfer situation. Prefer a covariate
+or hierarchical formulation over a lookup table.
+
+### C2. Unbounded predictions against a zero-floored label — **OPEN**
+
+HRDsum ≥ 0 by construction and 14.3% of samples are exactly 0. The elastic net
+emits negative predictions, inflating MAE with a priori impossible values.
+
+**Resolution.** Clip at 0, or model `log1p(HRDsum)` and back-transform. Cheap.
+
+### C3. Purity inversion — **OPEN, most serious**
+
+`cor(pred, purity)` within tissue = 0.165 vs `cor(label, purity)` = 0.019 — the
+model tracks tumour purity ~8× more strongly than the truth does. Skill falls
+monotonically with purity: +0.190 (low) → +0.056 (mid) → **−0.041 (high)**. In
+the cleanest samples the model **loses to the tissue mean**.
+
+A genuine biological signal should get *stronger* with purity, not weaker. Until
+this is explained, no strong biological claim is defensible.
+
+**Resolution.** Investigate whether variance-ranked probe selection is picking
+purity-driven probes. Consider purity as a covariate, or purity-matched
+training. Re-check with `purity_matched_subset()` (skill +0.045 there).
+
+### C4. Ovarian cohort is n = 10 — **OPEN (disclosure, not a code fix)**
+
+OV is the canonical HRD cancer and the main clinical application. TCGA ovarian
+methylation is mostly 27k-array, excluded by the 450k bridge. HRD-high behaviour
+is therefore inferred from UCEC/BRCA/STAD.
+
+**Resolution.** State this limitation in every presentation. Optionally rebuild
+the bridge to include 27k probes, accepting a much smaller probe intersection.
+
+---
+
+**Superseded 2026-09-17.** The old critical path (dry run → array → merge → read
+the pooled tissue-mean null) is **complete**. The pooled null was read: skill
++0.085, within-tissue r = 0.612, permutation p = 0.001. The answer to "is there
+a result worth reporting at all" is **yes, reframed** — see
+`docs/24_RESULTS_LOCO_RUN01.md` §6. The path forward is C1–C4 above.
