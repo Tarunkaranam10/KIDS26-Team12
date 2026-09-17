@@ -1,9 +1,9 @@
 #!/bin/bash
-#BSUB -J "kids26_loco[1-30]%6"
+#BSUB -J "kids26_loco[1-30]%4"
 #BSUB -q biohackathon
-#BSUB -n 8
-#BSUB -R "span[hosts=1] rusage[mem=230GB]"
-#BSUB -M 230GB
+#BSUB -n 4
+#BSUB -R "span[hosts=1] rusage[mem=60GB]"
+#BSUB -M 240GB
 #BSUB -W 8:00
 #BSUB -o logs/loco_%J_%I.out
 #BSUB -e logs/loco_%J_%I.err
@@ -32,36 +32,44 @@
 #               or loses a type this range MUST be updated; loco_merge.R will
 #               refuse to merge if a fold is missing, which is the safety net.
 #
-#   %6          Run at most 6 tasks concurrently. This number is set by MEMORY,
-#               not by cores.
+#   *** rusage[mem] ON THIS CLUSTER IS PER SLOT, NOT PER JOB. ***#
+#   This is the single most important thing to understand before editing the
+#   numbers below. LSF multiplies rusage[mem] by the slot count from -n. An
+#   earlier version of this file requested -n 8 with rusage[mem=230GB], which
+#   LSF read as 8 x 230 = 1,840 GB. No node in the queue has that much, so all
+#   30 tasks sat PENDING forever with:
+#       "Job's requirements for resource reservation not satisfied (Resource: mem)"
+#   The job does not fail; it simply never starts, which is easy to mistake for
+#   a busy queue.
 #
-#               The dry run peaked at 173 GB - far above the 75 GB that the
-#               preprocessing-only benchmark suggested, because fit_en holds the
-#               standardised inner-fold matrices and glmnet's own working copies
-#               on top of the 19 GB beta matrix.
+#   The rule: rusage[mem] x (-n) must fit on ONE node.
 #
-#               The biohackathon queue has two nodes: noderome117 (1,003 GB) and
-#               nodegpu217 (1,435 GB), about 2.4 TB combined. At 230 GB per task
-#               that allows 4 tasks on noderome117 and 6 on nodegpu217. Six
-#               concurrent tasks is a realistic ceiling that still leaves room
-#               for another user; the earlier %15 would have needed ~3.5 TB and
-#               would have caused mass memory kills.
+#   -n 4        Four slots. The work is memory-bound, not CPU-bound: the dry run
+#               used 3,360 s of CPU over 3,324 s of wall time, so barely more
+#               than one core was ever busy. Fewer slots also means a smaller
+#               per-slot memory figure is needed to reach the same total, which
+#               makes the job easier to schedule.
 #
-#               Expect 5 waves x ~1 h, so roughly 5-6 h wall time. Lower to %4
-#               if other teams are queued behind you. Do NOT raise this without
-#               re-measuring peak memory first.
+#   rusage[mem=60GB]
+#               60 GB x 4 slots = 240 GB reserved per task. The dry run peaked
+#               at 173 GB (Max Memory 173,252 MB), so this is ~39% headroom.
+#               Larger cancer types train on slightly more rows than ACC did, so
+#               the peak will drift upward a little.
 #
-#   -n 8        Memory-bound, not CPU-bound: the dry run used 3,360 s of CPU
-#               over 3,324 s of wall time, so barely more than one core was
-#               busy. Requesting 8 gives fread and matrixStats some room while
-#               keeping the slot small enough to schedule quickly. More cores
-#               would delay scheduling without speeding the job up.
+#   -M 240GB    The hard kill limit, expressed as the whole-job total. Keep this
+#               equal to rusage[mem] x (-n) so the reservation and the limit
+#               agree.
 #
-#   mem=230GB   Dry run peak was 173 GB (Max Memory 173,252 MB). 230 GB gives
-#               ~33% headroom. Larger cancer types train on slightly more rows
-#               than ACC did, so the peak will vary upward a little. LSF kills a
-#               job that exceeds its request, and losing a 55-minute fold to a
-#               memory kill is far more expensive than reserving extra.
+#   %4          Run at most 4 tasks concurrently. At 240 GB per task that is
+#               960 GB, which fits within noderome117 (1,003 GB) alone and
+#               comfortably within nodegpu217 (1,435 GB). Across both nodes LSF
+#               can place these wherever there is room.
+#
+#               Expect 8 waves x ~1 h, so roughly 8 h wall time. That is the
+#               honest cost of a 173 GB working set on a two-node queue.
+#               Raise to %6 only after confirming both nodes are idle
+#               (6 x 240 GB = 1,440 GB needs essentially all of nodegpu217).
+#               Lower to %2 if other teams are queued behind you.
 #
 #   -W 8:00     The dry run took 55 min on the smallest development type. Larger
 #               folds and a busier node will be slower, so 8 h is deliberate
@@ -85,7 +93,7 @@
 #
 # RERUNNING A FAILED TASK
 #   Array indices are independent, so a single failure is cheap to repair:
-#       bsub -q biohackathon -n 8 -R "span[hosts=1] rusage[mem=230GB]" -M 230GB -W 8:00 \
+#       bsub -q biohackathon -n 4 -R "span[hosts=1] rusage[mem=60GB]" -M 240GB -W 8:00 \
 #            -o logs/loco_rerun_%J.out -e logs/loco_rerun_%J.err \
 #            "cd $PWD && Rscript scripts/loco_one_fold.R data/processed/beta.tsv \
 #             data/processed/master_samples.tsv results/loco_run01 <INDEX>"
@@ -109,9 +117,9 @@ echo
 # Pin thread counts to the slots LSF granted. Without this, R's BLAS would spawn
 # one thread per physical core (up to 128 on nodegpu217), oversubscribing our
 # allocation, slowing this job down and disrupting others on the same host.
-export OMP_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
-export OPENBLAS_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
-export MKL_NUM_THREADS=${LSB_DJOB_NUMPROC:-8}
+export OMP_NUM_THREADS=${LSB_DJOB_NUMPROC:-4}
+export OPENBLAS_NUM_THREADS=${LSB_DJOB_NUMPROC:-4}
+export MKL_NUM_THREADS=${LSB_DJOB_NUMPROC:-4}
 
 # LSB_JOBINDEX is 1-based and maps directly onto the 1-based fold index, which
 # indexes the sorted development cancer types.
