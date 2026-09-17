@@ -20,7 +20,23 @@ The team reports that data acquisition is complete. A recursive audit of the sha
 
 ## Implemented but not executed here
 
-R elastic-net nested LOCO fitting, R smoke tests, frozen inference and Shiny are implemented. Static inspection confirms outer-cancer isolation and training-only variance filtering, imputation, scaling, feature selection, alpha/lambda tuning, null mean and calibration reservation. The training script now exports final coefficients. R is not installed on Windows or the available WSL image; an attempted package-index refresh did not complete, so no R runtime fit, package installation, lockfile, or rendered Shiny validation is claimed. Run setup and the R smoke test on the intended R host before biological fitting.
+R elastic-net nested LOCO fitting, R smoke tests, frozen inference and Shiny are implemented. Static inspection confirms outer-cancer isolation and training-only variance filtering, imputation, scaling, feature selection, alpha/lambda tuning, null mean and calibration reservation. The training script now exports final coefficients.
+
+**UPDATED 2026-09-17 — the R runtime caveat below is resolved.** The previous
+text read: *"R is not installed on Windows or the available WSL image ... so no R
+runtime fit, package installation, lockfile, or rendered Shiny validation is
+claimed."* R 4.5.0 is available on the cluster, `tests/smoke_model.R` passes
+there (jobs 323078428, 323078739), and a full 30-fold nested LOCO fit has now
+executed end-to-end (array `323078995`, 30/30 DONE, merged 2026-09-17 06:20).
+Leakage assertions pass executably, not just by inspection.
+
+What is now claimed on runtime evidence: nested LOCO fitting, training-only
+preprocessing, lambda-path derivation (0/30 folds at a boundary), conformal
+interval construction, and the inference provenance gate
+(`tests/test_provenance_gate.R`). Results: `docs/24_RESULTS_LOCO_RUN01.md`.
+
+What is still **not** claimed: rendered Shiny validation, a lockfile, any CNS or
+pediatric result. The locked CNS partition remains unopened.
 
 The full historical matrix has not been located or streamed end-to-end by this repository. Probe-mask construction is complete for HM450 to EPIC v1, but exact PBTP platform confirmation and empirical preprocessing harmonization remain. Raw-IDAT QC/conumee2 execution, pinned canonical scarHRD comparison, broader platform/allele simulation and PBTP integration remain data-dependent. No biological model has been trained; no transfer accuracy or calibrated HRD-high probability exists.
 

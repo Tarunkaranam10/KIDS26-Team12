@@ -19,11 +19,17 @@
 #   drift away from the serial one.
 #
 # USAGE
-#   Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index>
+#   Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index> [transform]
 #
 #   fold_index is 1-based and indexes into the sorted vector of development
 #   cancer types, which is exactly the order train_baseline.R iterates in. LSF
 #   array indices are also 1-based, so LSB_JOBINDEX maps across directly.
+#
+#   transform is optional and defaults to "identity" (the run 01 behaviour).
+#   Set "log1p" to fit on log(1+HRDsum) and back-transform - see C2 in docs/21
+#   and R/calibration.R for why this is a real trade-off and not a free win.
+#   "clip" is NOT offered here because clipping is a post-hoc transform of the
+#   predictions and needs no refit; the merge step applies it.
 #
 # OUTPUT
 #   One .rds bundle and two .tsv files per fold, written into <out_dir>/folds/.
@@ -36,11 +42,12 @@
 # =============================================================================
 
 args <- commandArgs(trailingOnly=TRUE)
-if (length(args) != 4) {
-  stop("Usage: Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index>")
+if (length(args) < 4 || length(args) > 5) {
+  stop("Usage: Rscript scripts/loco_one_fold.R <beta.tsv> <master.tsv> <out_dir> <fold_index> [transform]")
 }
 beta_path <- args[1]; meta_path <- args[2]; out_dir <- args[3]
 fold_index <- as.integer(args[4])
+transform_name <- if (length(args) == 5) args[5] else "identity"
 if (is.na(fold_index) || fold_index < 1L) stop("fold_index must be a positive integer")
 
 fold_dir <- file.path(out_dir, "folds")
@@ -48,9 +55,12 @@ dir.create(fold_dir, recursive=TRUE, showWarnings=FALSE)
 
 cat("host       :", Sys.info()[["nodename"]], "\n")
 cat("fold index :", fold_index, "\n")
+cat("transform  :", transform_name, "\n")
 cat("started    :", format(Sys.time()), "\n\n")
 
 source("R/model.R")
+source("R/calibration.R")
+tf <- get_transform(transform_name)
 if (!requireNamespace("data.table", quietly=TRUE)) stop("Install dependencies with scripts/setup.R")
 
 # --- Load matrix and metadata ----------------------------------------------
@@ -91,21 +101,30 @@ te <- !cns & meta$cancer_type == type
 cat(sprintf("train n=%d  test n=%d\n\n", sum(tr), sum(te)))
 
 t0 <- Sys.time()
-b <- fit_en(x[tr,,drop=FALSE], meta$HRDsum[tr], meta$patient_id[tr], meta$cancer_type[tr])
+# C2: fit on the TRANSFORMED target. tf$forward is identity by default, so this
+# reproduces run 01 exactly unless a transform was requested.
+b <- fit_en(x[tr,,drop=FALSE], tf$forward(meta$HRDsum[tr]), meta$patient_id[tr], meta$cancer_type[tr])
+b$target_transform <- transform_name
 cat(sprintf("fit_en completed in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units="mins"))))
 cat(sprintf("  selected alpha=%.2g lambda=%.5g  (boundary: %s)\n",
             b$alpha, b$lambda, b$lambda_boundary_side))
 
 p <- predict_en(b, x[te,,drop=FALSE])
+# Back-transform IMMEDIATELY so every downstream metric, null and artefact is on
+# the original HRDsum scale. Mixing scales across folds would be silently wrong.
+p$predicted_reference_HRDsum <- tf$inverse(p$predicted_reference_HRDsum)
 p$actual <- meta$HRDsum[te]
 p$cancer_type <- type
 p$patient_id <- meta$patient_id[te]
-p$null_prediction <- b$training_mean
+# training_mean is stored on the transformed scale inside the bundle, so it must
+# be back-transformed too before it can serve as a null on the original scale.
+p$null_prediction <- tf$inverse(b$training_mean)
 p$split <- "development_LOCO"
 
 mm <- metrics(p$actual, p$predicted_reference_HRDsum)
 mm$cancer_type <- type
 mm$train_n <- sum(tr)
+mm$target_transform <- transform_name
 mm$selected_features <- length(b$preprocess$features)
 mm$alpha <- b$alpha
 mm$lambda <- b$lambda
