@@ -244,7 +244,7 @@ with a single-element group.
 
 ---
 
-### B7. `predict_frozen.R` has no provenance gate
+### B7. `predict_frozen.R` has no provenance gate — **RESOLVED 2026-09-16**
 
 **Symptom.** Unlike the training script, inference accepts any beta matrix and
 will happily score an engineering fixture, then pass it to the Shiny app via
@@ -254,6 +254,33 @@ will happily score an engineering fixture, then pass it to the Shiny app via
 marked as simulated/fixture unless an explicit `--allow-fixture` flag is passed,
 and stamp the output file with the provenance class so downstream display cannot
 misrepresent it.
+
+> **Done.** The gate now lives in `R/provenance.R` — shared rather than copied,
+> so training and inference cannot drift apart — and runs in
+> `scripts/predict_frozen.R` *before* the matrix is read, so an unlabelled 28 GB
+> file is refused without being loaded.
+>
+> Three classes are refused, not one: a declared fixture
+> (`engineering_only=true`), a matrix with **no sidecar at all**, and a
+> non-fixture matrix whose `probe_allowlist_sha256` is absent. The middle case
+> matters most — the original gap was reachable by simply dropping an arbitrary
+> TSV on disk, which carries no `engineering_only` flag to catch.
+>
+> `--allow-fixture` permits engineering runs but cannot launder the label: the
+> class is suffixed `;OVERRIDDEN_BY_ALLOW_FIXTURE`, a warning is raised,
+> `reportable` is forced `FALSE`, estimates and bounds are blanked, and the
+> `provenance` column leads with `NOT A SCIENTIFIC RESULT`. Since `app/app.R`
+> validates `KIDS26_DEMO_RESULTS` structurally only and prints `provenance`
+> verbatim, putting the class *in that column* is what actually closes the path
+> to the demo.
+>
+> Probe-allowlist mismatch between model and scoring matrix is recorded per row
+> (`probe_set_match`) and warned about, but is **not** fatal — cross-platform
+> transfer to pediatric EPIC arrays is the research goal, and
+> `apply_preprocess()` aligns by feature name.
+>
+> `tests/test_provenance_gate.R` asserts each refusal executably, including
+> against the real `data/processed/beta.provenance.json`.
 
 ---
 
