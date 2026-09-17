@@ -1,13 +1,19 @@
 # 23 — Pipeline Schematic and Current Position
 
-**Status: 2026-09-17 11:45 CDT.** Array `323078995` **COMPLETE** (30/30 folds,
-merged 06:20). First real result exists — see `docs/24_RESULTS_LOCO_RUN01.md`.
+**Status: 2026-09-17 PM.** Array `323078995` **COMPLETE** (30/30 folds, merged
+06:20). First real result exists — see `docs/24_RESULTS_LOCO_RUN01.md`.
+Defects C1–C4 investigated — see `docs/25_C1_C2_C3_INVESTIGATION.md`.
 `docs/21` is the blocker ledger.
 
-> **Changed since the 2026-09-16 version of this document:** Stage 5 moved from
-> RUNNING to COMPLETE, Stages 6 and 7 executed, the verdict fork resolved to
-> "continue modelling", and a new Stage 5B (model-quality repairs C1–C4) was
-> inserted before the CNS lock can open.
+> **Changed since the 2026-09-16 version:** Stage 5 moved from RUNNING to
+> COMPLETE, Stages 6 and 7 executed, the verdict fork resolved to "continue
+> modelling", and a new Stage 5B (model repairs C1–C4) was inserted before the
+> CNS lock can open.
+>
+> **Changed again 2026-09-17 PM:** C3 **downgraded** (the purity inversion was
+> an artefact of C1, not purity capture), C1 **escalated** (the label-free fix
+> failed), C2 clipping **adopted**, and two new branches added under C1 — C1b
+> few-shot (viable) and C1c within-tissue rank (untested).
 
 ---
 
@@ -113,13 +119,18 @@ flowchart TD
     G2 --> D0
     G3 --> D0
 
-    subgraph REPAIR["STAGE 5B - MODEL REPAIRS (OPEN - NEXT WORK)"]
-        C1["C1 per-tissue calibration<br/>worth 1.17 MAE units<br/>MUST fit inside LOCO loop"]
-        C2["C2 zero floor<br/>14.3% of labels are 0<br/>clip or log1p"]
-        C3["C3 PURITY INVERSION<br/>skill NEGATIVE at high purity<br/>most serious defect"]
+    subgraph REPAIR["STAGE 5B - MODEL REPAIRS (investigated 2026-09-17)"]
+        C1["C1 per-tissue calibration<br/>ESCALATED - label-free<br/>covariates FAILED, LOTO R2 -0.116"]
+        C2["C2 zero floor<br/>clip ADOPTED +0.008 skill<br/>log1p 30-fold run in flight"]
+        C3["C3 purity inversion<br/>DOWNGRADED - artefact of C1<br/>partial cor rose 0.612 to 0.621"]
         C4["C4 OV is n=10<br/>disclosure, not a code fix"]
+        C1B["C1b few-shot calibration<br/>VIABLE - k=10 gets 58% of gain<br/>k=3 actively HURTS"]
+        C1R["C1c within-tissue rank only<br/>UNTESTED - needs same-type<br/>cohort at prediction time"]
         C5["Re-run array, confirm<br/>skill improves"]
-        C1 --> C5
+        C1 --> C1B
+        C1 --> C1R
+        C1B --> C5
+        C1R --> C5
         C2 --> C5
         C3 --> C5
         C4 --> C5
@@ -165,10 +176,12 @@ flowchart TD
     style D3 fill:#d1e7dd,stroke:#0f5132,stroke-width:4px
     style G2 fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
     style G3 fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
-    style C3 fill:#f8d7da,stroke:#b02a37,stroke-width:3px
-    style C1 fill:#ffe08a
-    style C2 fill:#ffe08a
+    style C1 fill:#f8d7da,stroke:#b02a37,stroke-width:3px
+    style C2 fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
+    style C3 fill:#ffe08a
     style C4 fill:#ffe08a
+    style C1B fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
+    style C1R fill:#ffe08a
     style F2 fill:#f8d7da,stroke:#b02a37,stroke-width:2px
     style I2 fill:#cfe2ff,stroke:#084298,stroke-width:2px
     style I6 fill:#fff3cd
@@ -187,9 +200,21 @@ flowchart TD
 | 5 Nested LOCO CV | **COMPLETE** | 30/30 DONE, 0 EXIT, 6.7 h |
 | 6 Merge | **COMPLETE** | 11 result files, 06:20 |
 | 7 Fork | **RESOLVED — continue** | `docs/24` §6 |
-| **5B Repairs** | **OPEN — next work** | C1–C4 in `docs/21` |
+| **5B Repairs** | **Investigated; C1 unsolved** | `docs/25` |
 | 7B Freeze + unlock | Not reached | gated on C1–C4 |
 | 8 Inference | Code ready, gate closed | nothing scored yet |
+
+### Stage 5B detail
+
+| Defect | Status | Evidence |
+|---|---|---|
+| C1 calibration | **ESCALATED — label-free fix failed** | LOTO R² −0.116, worse than a constant |
+| C1b few-shot | **VIABLE** | k=10 → 58% of achievable gain; k=3 hurts |
+| C1c rank-only | **UNTESTED** | needs same-type cohort at predict time |
+| C2 clip | **ADOPTED** | MAE 9.049 → 8.972, Spearman 1.000 |
+| C2 log1p | **In flight** | 4/30 folds done, MAE −29% but r falls on BRCA/UCEC |
+| C3 purity | **DOWNGRADED** | partial cor rose 0.612 → 0.621 |
+| C4 OV n=10 | **OPEN** | disclosure only |
 
 Measured cost: 55 min/fold, **173 GB peak** (vs 240 GB reserved), memory-bound
 not CPU-bound, 6.7 h wall for the full array.
@@ -198,16 +223,29 @@ not CPU-bound, 6.7 h wall for the full array.
 
 ## 4. What now needs to be done, in order
 
-1. **C2 zero floor** — cheapest fix, clip at 0 or `log1p`. Hours.
-2. **C1 per-tissue calibration** — worth ~1.17 MAE. Must be fitted on training
-   tissues only; a held-out tissue has no offset available, which is exactly the
-   pediatric-transfer situation, so prefer a covariate or hierarchical form over
-   a lookup table.
-3. **C3 purity inversion** — the blocking scientific question. Skill is
-   *negative* in the highest-purity third. Genuine biological signal should
-   strengthen with purity, not weaken.
+**Revised 2026-09-17 PM after the C1/C2/C3 investigation (`docs/25`).** The
+priority order below is not the one this document carried this morning — two
+defects swapped places once measured.
+
+1. **C2 log1p decision** — full 30-fold run in flight (arrays `323169191` +
+   `323176856`). Clipping is already adopted: free, +0.008 skill, ranking
+   exactly preserved. log1p cut MAE 29% on the first 4 folds but *lowered*
+   within-tissue correlation on BRCA and UCEC, so the pooled run decides it.
+2. **C1 — now the hard problem, not a quick fix.** The label-free tissue
+   covariate approach failed leave-one-tissue-out in every configuration
+   (best R² = −0.116, worse than a constant). Two supported paths remain:
+   - **C1b few-shot**: ~10 labelled samples from the new tissue recover 58% of
+     the achievable gain. k=3 actively hurts. Works, but it is an ask.
+   - **C1c within-tissue rank only**: honest and matches the clinical question,
+     but needs a same-type reference cohort at prediction time. Untested.
+   - Neither solves the **N-of-1 pediatric case**. This is an open scientific
+     problem.
+3. **C3 purity** — downgraded. The inversion was C1's fixed offset eating a
+   shrinking margin, not purity capture. A residual gradient survives
+   correction, so it is not closed. The untested piece is whether individual
+   selected CpGs are purity-associated (~4 h probe-level job).
 4. **C4 OV disclosure** — one paragraph in every presentation.
-5. **Re-run the array** and confirm skill improves.
+5. **Re-run the array** with the adopted transform and confirm skill improves.
 6. **Freeze, then open the CNS lock once.**
 7. **B10 app governance** before anything is demoed publicly.
 

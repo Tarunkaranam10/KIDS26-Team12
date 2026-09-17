@@ -147,6 +147,78 @@ tested are listed in §4 below.
 
 ---
 
+## C1b — Few-shot calibration: works, but only for the tissues that need it
+
+Tested with `scripts/fewshot_calibration.R`. No refit required: an offset
+correction is a post-hoc shift of predictions that already exist, so this is
+computed exactly from run 01's held-out predictions. 200 random draws per
+(tissue, k), scored only on the samples **not** used to estimate the offset.
+
+### The comparator matters more than the result
+
+It is tempting to compare a few-shot-corrected model against the original
+tissue-mean null. That comparison is rigged: it gives the model *k* labels and
+the null none. If a clinician has *k* labelled samples from a new tumour type,
+they can ignore the model entirely and predict `mean(k labels)` for every future
+patient. **That** is the honest competitor, and it also improves with *k*.
+
+### Results (29 tissues, equal weight)
+
+| k | model uncorrected | model few-shot | model oracle | **null few-shot** | offset error | tissues helped | **beats fair null** |
+|---|---|---|---|---|---|---|---|
+| 3 | 8.43 | 8.67 | 7.44 | 9.99 | 4.35 | 8/29 | 18/29 |
+| 5 | 8.43 | 8.20 | 7.44 | 9.52 | 3.31 | 11/29 | 20/29 |
+| 10 | 8.43 | **7.86** | 7.44 | 9.14 | 2.36 | 14/29 | 20/29 |
+| 20 | 8.44 | **7.68** | 7.45 | 8.95 | 1.59 | 17/29 | 20/29 |
+
+Fraction of the achievable (oracle) gain captured: **k=3 → −24%**, k=5 → 23%,
+**k=10 → 58%**, k=20 → 77%.
+
+### Reading
+
+**k=3 actively hurts.** The offset estimated from 3 samples has a mean error of
+4.35 units against a true offset SD of 4.83 — the estimate is as noisy as the
+quantity being estimated, so correction injects more error than it removes.
+
+**k=10 is the practical knee.** It captures 58% of the oracle gain and cuts MAE
+8.43 → 7.86. Below that the estimate is too noisy; above it returns diminish.
+
+**The model beats the fair null in 20 of 29 tissues at every k ≥ 5**, and that
+count does not improve with more labels — which is the important point. The
+model's advantage over "just average your k labels" is a *fixed* property of
+whether it has within-tissue signal in that tissue, not something more labels
+buy.
+
+### The gain is entirely concentrated in mis-levelled tissues
+
+At k=10, `cor(gain, |true tissue offset|) = **0.991**`. Few-shot calibration
+helps exactly the tissues that were badly mis-levelled and mildly harms the
+already-calibrated ones:
+
+| Helped most | MAE before → after | | Harmed | MAE before → after |
+|---|---|---|---|---|
+| THCA | 8.28 → **3.45** | | KIRC | 4.78 → 5.06 |
+| SARC | 17.95 → **14.18** | | PAAD | 7.57 → 7.78 |
+| PCPG | 9.08 → **5.65** | | KICH | 3.97 → 4.16 |
+| UCEC | 11.77 → **9.42** | | ESCA | 9.96 → 10.12 |
+
+Only 14 of 29 tissues improve. The mean gain is real but comes from a minority
+of tissues with large offsets.
+
+Note THCA and PCPG again: few-shot fixes most of their offset, but both still
+lose to their own tissue-mean null (THCA null MAE = 0.816 vs corrected 3.45).
+For near-constant tissues nothing rescues the model.
+
+### Status
+
+**C1b VIABLE with caveats.** Roughly 10 labelled samples from a new tumour type
+recover over half the achievable calibration gain. For the pediatric
+application this is a concrete, modest ask — but it is still an ask, and it
+assumes ~10 pediatric HRD measurements can be obtained. It does **not** solve
+the N-of-1 case, where by definition there is one patient and no cohort.
+
+---
+
 ## C2 — Zero floor
 
 ### Clipping: free, small, safe

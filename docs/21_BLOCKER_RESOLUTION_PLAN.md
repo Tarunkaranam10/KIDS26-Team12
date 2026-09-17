@@ -21,6 +21,16 @@ and merged on 2026-09-17 at 06:20. **A real result exists** and is recorded in
 | **C1–C4 added** | new P1.5 section — model-quality defects found by run 01 |
 | Critical path | rewritten; old path complete |
 
+**Second update, 2026-09-17 PM** (`docs/25`). Two of the three investigated
+defects inverted their priority:
+
+| Defect | Was | Now |
+|---|---|---|
+| **C3** purity | most serious | **DOWNGRADED** — artefact of C1; partial correlation *rose* 0.612 → 0.621 when controlling for purity |
+| **C1** calibration | tractable fix | **ESCALATED** — label-free approach fails LOTO in every configuration (best R² = −0.116) |
+| **C2** zero floor | cheap win | clip **ADOPTED** (+0.008 skill, ranking preserved); log1p full run in flight |
+| **C1b** few-shot | untested | **VIABLE** — k=10 labels recover 58% of achievable gain |
+
 Performance statements about the *locked CNS partition* and about *pediatric
 transfer* remain plans, not findings. The lock is still closed.
 
@@ -400,16 +410,20 @@ graph TD
     CONF --> VERDICT{"Tissue confound<br/>disqualifying?"}
     VERDICT -->|"NO — within-tissue r=0.61,<br/>perm p=0.001, 29/30 tissues"| CONTINUE["CONTINUE MODELLING<br/>reframed as within-tissue ranker"]
 
-    CONTINUE --> C1["C1 per-tissue calibration<br/>OPEN — worth 1.17 MAE"]
-    CONTINUE --> C2["C2 zero floor / log1p<br/>OPEN — 14.3% of y are 0"]
-    CONTINUE --> C3["C3 purity inversion<br/>OPEN — skill NEGATIVE at high purity"]
-    CONTINUE --> C4["C4 OV n=10 disclosure<br/>OPEN — 27k array excluded"]
+    CONTINUE --> C1["C1 per-tissue calibration<br/>ESCALATED - label-free<br/>approach FAILED, LOTO R2 negative"]
+    CONTINUE --> C2["C2 zero floor<br/>clip ADOPTED, log1p in flight"]
+    CONTINUE --> C3["C3 purity inversion<br/>DOWNGRADED - artefact of C1,<br/>partial cor went UP 0.612 to 0.621"]
+    CONTINUE --> C4["C4 OV n=10 disclosure<br/>OPEN - 27k array excluded"]
 
-    C1 --> LOCK
+    C1 --> C1B["C1b few-shot calibration<br/>VIABLE - k=10 recovers 58%<br/>but needs 10 labels per new tissue"]
+    C1 --> C1R["C1c within-tissue rank only<br/>UNTESTED - needs same-type<br/>reference cohort at predict time"]
+
+    C1B --> LOCK
+    C1R --> LOCK
     C2 --> LOCK
     C3 --> LOCK
     C4 --> LOCK
-    LOCK["CNS LOCK — still closed<br/>opens ONCE, after C1-C4"]
+    LOCK["CNS LOCK - still closed<br/>opens ONCE, after C1-C4"]
 
     B7["B7 inference provenance<br/>RESOLVED 2026-09-16"] --> B10["B10 app governance<br/>OPEN, P2"]
     LOCK --> B10
@@ -426,10 +440,12 @@ graph TD
     style FIT fill:#d4edda,stroke:#0f5132,stroke-width:3px
     style CONF fill:#d4edda
     style CONTINUE fill:#d1e7dd,stroke:#0f5132,stroke-width:3px
-    style C1 fill:#fff3cd,stroke:#d39e00
-    style C2 fill:#fff3cd,stroke:#d39e00
-    style C3 fill:#f8d7da,stroke:#b02a37,stroke-width:2px
+    style C1 fill:#f8d7da,stroke:#b02a37,stroke-width:3px
+    style C2 fill:#d1e7dd,stroke:#0f5132
+    style C3 fill:#fff3cd,stroke:#d39e00
     style C4 fill:#fff3cd,stroke:#d39e00
+    style C1B fill:#d1e7dd,stroke:#0f5132,stroke-width:2px
+    style C1R fill:#ffe08a,stroke:#d39e00
     style LOCK fill:#f8d7da,stroke:#b02a37,stroke-width:2px
     style B10 fill:#fff3cd
     style B11 fill:#fff3cd
@@ -445,26 +461,7 @@ graph TD
 These are not blockers in the original sense (nothing is broken or unverifiable);
 they are substantive modelling defects measured in `docs/24_RESULTS_LOCO_RUN01.md`.
 
-### C1. Per-tissue calibration offset — **OPEN**
-
-Mean absolute per-tissue offset is 3.46 HRD units (SD 4.83, range −15.44 to
-+8.29). Removing it drops pooled MAE 9.049 → 7.881. This single defect costs
-more than the model's entire margin over the tissue-mean null (+0.085).
-
-**Resolution.** Fit a per-tissue offset **inside** the LOCO loop, on training
-tissues only. Fitting it on the held-out tissue is leakage and voids the fold.
-Note the unresolved question this raises: a held-out tissue has no offset to
-apply, which is precisely the pediatric-transfer situation. Prefer a covariate
-or hierarchical formulation over a lookup table.
-
-### C2. Unbounded predictions against a zero-floored label — **OPEN**
-
-HRDsum ≥ 0 by construction and 14.3% of samples are exactly 0. The elastic net
-emits negative predictions, inflating MAE with a priori impossible values.
-
-**Resolution.** Clip at 0, or model `log1p(HRDsum)` and back-transform. Cheap.
-
-### C3. Purity inversion — **OPEN, most serious**
+### C3. Purity inversion — **DOWNGRADED 2026-09-17, was "most serious"**
 
 `cor(pred, purity)` within tissue = 0.165 vs `cor(label, purity)` = 0.019 — the
 model tracks tumour purity ~8× more strongly than the truth does. Skill falls
@@ -474,9 +471,83 @@ the cleanest samples the model **loses to the tissue mean**.
 A genuine biological signal should get *stronger* with purity, not weaker. Until
 this is explained, no strong biological claim is defensible.
 
-**Resolution.** Investigate whether variance-ranked probe selection is picking
-purity-driven probes. Consider purity as a covariate, or purity-matched
-training. Re-check with `purity_matched_subset()` (skill +0.045 there).
+> **Investigated and largely exonerated — `docs/25` §C3.** The decisive test is
+> the partial correlation: if purity drove the signal, controlling for it would
+> collapse the within-tissue correlation. It does the opposite —
+> **0.6124 → 0.6210**, a slight *increase*.
+>
+> The inversion was an artefact of C1. The per-tissue offset is essentially
+> constant across purity tertiles (3.50 / 3.55 / 3.49), so it consumes a fixed
+> ~3.5 units of a margin that shrinks as the tissue-mean null becomes easier to
+> beat at high purity. Remove the offset and skill is **positive in all three
+> tertiles** (0.242 / 0.207 / 0.159). `cor(per-tissue offset, mean purity)` is
+> −0.124 — weak, and the wrong sign to explain an inversion.
+>
+> Purity is a nuisance variable the model partially encodes, **not** the source
+> of its signal. A residual gradient survives correction (0.242 → 0.159), so
+> this is downgraded rather than closed.
+>
+> **Not tested:** whether individual selected CpGs are purity-associated. That
+> needs a probe-level job against the 28 GB matrix (~4 h). Probe selection is
+> stable enough to make it worthwhile — 4,080 of 5,000 probes are shared across
+> all folds examined.
+
+### C1. Per-tissue calibration offset — **ESCALATED 2026-09-17**
+
+Mean absolute per-tissue offset is 3.46 HRD units (SD 4.83, range −15.44 to
++8.29). Removing it drops pooled MAE 9.049 → 7.881. This single defect costs
+more than the model's entire margin over the tissue-mean null (+0.085).
+
+**Resolution.** Fit a per-tissue offset **inside** the LOCO loop, on training
+tissues only. Fitting it on the held-out tissue is leakage and voids the fold.
+
+> **The label-free approach FAILED — `docs/25` §C1.** Learning
+> `offset ~ tissue covariates` (mean prediction, prediction SD, mean purity,
+> mean OOD distance, n) and evaluating leave-one-tissue-out — which mirrors
+> deployment exactly — **every configuration lost to predicting the global mean
+> offset.** Best LOTO R² = −0.116; the full four-covariate model reached −0.217.
+> The offset is uncorrelated with every available covariate (|r| ≤ 0.267).
+>
+> The negative result is trustworthy: `tests/test_calibration.R` case 8 recovers
+> a synthetic linear offset at LOTO R² > 0.8, and case 9 confirms the machinery
+> does not manufacture signal from noise. With 30 tissues as 30 observations,
+> there is simply not enough information.
+>
+> **Few-shot calibration DOES work — `docs/25` §C1b.** ~10 labelled samples from
+> the new tissue recover **58% of the achievable gain** (MAE 8.43 → 7.86) and
+> beat the fair k-label null in 20 of 29 tissues. k=3 actively *hurts* (offset
+> error 4.35 vs true offset SD 4.83). The gain is concentrated almost entirely
+> in mis-levelled tissues: `cor(gain, |true offset|) = 0.991`, and only 14 of 29
+> tissues improve at all.
+>
+> **Consequence for the project.** Absolute HRDsum on a brand-new tissue with
+> zero labels is **not currently achievable**. Two supported paths remain:
+> (a) report within-tissue relative rank, which needs a same-type reference
+> cohort, or (b) obtain ~10 labelled samples per new tumour type. Neither solves
+> the N-of-1 pediatric case. This is an open scientific problem, not a coding
+> task.
+
+### C2. Unbounded predictions against a zero-floored label — **PARTLY RESOLVED**
+
+HRDsum ≥ 0 by construction and 14.3% of samples are exactly 0. The elastic net
+emits negative predictions, inflating MAE with a priori impossible values.
+
+**Resolution.** Clip at 0, or model `log1p(HRDsum)` and back-transform.
+
+> **Clipping ADOPTED.** No refit needed: MAE 9.049 → 8.972, skill 0.085 →
+> 0.093, Spearman with the raw prediction exactly **1.000**, so no ranking
+> changes. 227 samples (3.2%) were negative, most extreme −11.53.
+>
+> **log1p provisional, full 30-fold run in flight** (array `323176856`, plus the
+> 4 folds from `323169191`). On the first 4 folds: sample-weighted MAE
+> **11.204 → 7.964**, with the largest gains on the quiet tumours the model was
+> over-predicting (THCA 8.28 → 1.99, PCPG 9.10 → 4.57). But within-tissue
+> correlation **falls** for BRCA (0.632 → 0.538) and UCEC (0.758 → 0.745) — the
+> trade-off lands in the clinically important direction. Pooled r barely moves,
+> 0.440 → 0.450.
+>
+> Zero inflation is **not** addressed by log1p (it maps 0 → 0). A genuine
+> hurdle / two-part model is recorded as future work.
 
 ### C4. Ovarian cohort is n = 10 — **OPEN (disclosure, not a code fix)**
 
