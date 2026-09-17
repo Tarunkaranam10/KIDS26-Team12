@@ -68,6 +68,7 @@ The demo defaults to prominently labeled synthetic fixtures. To use approved out
 | docs/ | [Executive critique](docs/00_EXECUTIVE_PLAN.md), [literature](docs/01_LITERATURE_EVIDENCE.md), [new-paper reconciliation](docs/15_NEW_LITERATURE_RECONCILIATION.md), [method matrix](docs/02_METHOD_DECISION.md), [ground truth/CNV](docs/10_GROUND_TRUTH_AND_CNV.md) |
 | docs/ | [Pre-event checklist](docs/04_PRE_HACKATHON_CHECKLIST.md), [runbook](docs/05_THREE_DAY_HACKATHON_RUNBOOK.md), [feature bridge](docs/17_450K_EPIC_FEATURE_BRIDGE.md), [PBTP readiness](docs/18_PBTP_READINESS.md), [validation](docs/06_VALIDATION_STRATEGY.md), [risk register](docs/11_RISK_REGISTER.md) |
 | docs/ | [Synthetic data](docs/07_SYNTHETIC_DATA.md), [n-of-1](docs/08_N_OF_1_ROADMAP.md), [post-event](docs/09_POST_HACKATHON_PLAN.md), [environment](docs/12_ENVIRONMENT.md) |
+| docs/ | [Blocker resolution plan](docs/21_BLOCKER_RESOLUTION_PLAN.md), [confounding and pan-cancer validity](docs/22_CONFOUNDING_AND_PANCANCER_PLAN.md) |
 | config/ | Public manifests, curated evidence records, analysis protocol |
 | scripts/, R/ | Acquisition/preparation/model/engineering utilities |
 | data/raw, data/interim, data/processed | Ignored input, working and prepared data |

@@ -31,11 +31,14 @@ python scripts/acquire_tcga.py published --tier beta --download
 
 ```sh
 python scripts/acquire_tcga.py published --tier cnv --download
-python scripts/acquire_tcga.py discover --kind idat --projects TCGA-BRCA --limit 12
-python scripts/acquire_tcga.py discover --kind masked-idat --projects TCGA-BRCA --limit 12
+python scripts/acquire_tcga.py discover --kind masked-idat --projects TCGA-BRCA --limit 12 --download
 ```
 
-The SNP6 segmentation + ABSOLUTE allele-specific segment files total about 419 MB. They provide references, NEVER methylation-CNV predictors. Inspect discovery manifests for intensity availability and preprocessing. Add `--download` to the chosen intensity command only after checking the pairing and selected specimens. Preserve red/green pairs. Both commands return only open access; a zero result is a discovery problem to investigate, not permission to manufacture intensities from betas. Masking can remove genotype-sensitive information: masked IDAT is not automatically sufficient for the allele experiment. Raw access status varies; inspect portal metadata and any access terms. No institutional-login automation is supplied.
+The SNP6 segmentation + ABSOLUTE allele-specific segment files total about 419 MB. They provide references, NEVER methylation-CNV predictors. Add `--download` to the chosen intensity command only after checking the pairing and selected specimens. Preserve red/green pairs.
+
+**Resolved 2026-09-15 — the earlier zero-result IDAT query was a bug, not a data or permissions problem.** GDC files methylation array intensities *only* as `Masked Intensities`; there is no `Raw Intensities` methylation data type (that value belongs to Affymetrix SNP6 and GeneChip expression arrays, which is why the old `--kind idat` query always returned zero). All 61,830 GDC methylation-array files are **open access**, including 1,790 open 450K IDATs for TCGA-BRCA alone. `--kind idat` and `--kind masked-idat` are now synonyms for the same correct query. No institutional-login automation is needed, because none of this is controlled access.
+
+Masking can remove genotype-sensitive information: masked IDAT is not automatically sufficient for the allele experiment. Verify what the GDC masking step actually removes before relying on it for anything allele-aware.
 
 Methylation-CNV requires IDAT or genuinely retained M/U total intensities with reference controls. Beta ratios alone do not preserve total signal. Obtain assay-compatible normals and test conumee 2.0 on a few paired tumors before expanding. Budget from the manifest byte sum plus 2-3x intermediate space; do not download all raw arrays first.
 

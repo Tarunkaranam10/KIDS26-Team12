@@ -173,3 +173,10 @@ __pycache__/
 .venv/
 renv/library/
 renv/staging/
+
+# Rendered README output (build artifact)
+README.html
+README_files/
+
+# Cluster job logs (contain absolute cluster paths)
+logs/

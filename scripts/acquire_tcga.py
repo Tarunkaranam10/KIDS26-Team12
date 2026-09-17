@@ -45,7 +45,9 @@ def download(row,out):
       for block in iter(lambda:res.read(1024*1024),b''):f.write(block)
    if part.stat().st_size!=size or digest(part)!=row['md5']:raise ValueError(f'Checksum/size failure: {part}. Inspect and remove only this .part before retrying.')
    part.replace(dest)
-   dest.with_suffix(dest.suffix+'.sha256').write_text(digest(dest,'sha256')+'  '+dest.name+'\n')
+   # newline='\n' pins LF: write_text defaults to os.linesep translation, which emits CRLF on
+   # Windows and breaks `sha256sum -c` by putting a stray \r inside the filename field.
+   dest.with_suffix(dest.suffix+'.sha256').write_text(digest(dest,'sha256')+'  '+dest.name+'\n',newline='\n')
    return 'downloaded-verified'
   except (urllib.error.URLError,TimeoutError,OSError):
    if attempt==3:raise
@@ -53,12 +55,18 @@ def download(row,out):
 def write_tsv(p,rows,fields):
  p.parent.mkdir(parents=True,exist_ok=True)
  with p.open('w',newline='',encoding='utf8') as f:
-  w=csv.DictWriter(f,fieldnames=fields,delimiter='\t',extrasaction='ignore');w.writeheader();w.writerows(rows)
+  # csv's default lineterminator is '\r\n'; pin LF so generated manifests are not CRLF.
+  w=csv.DictWriter(f,fieldnames=fields,delimiter='\t',extrasaction='ignore',lineterminator='\n');w.writeheader();w.writerows(rows)
+def clean_row(r):
+ """Strip stray whitespace/CR from manifest fields. Upstream source manifests are CRLF, and a
+ trailing \\r in the last column corrupts any value taken from it (notably size, and filename
+ whenever column order differs)."""
+ return {k:(v or '').strip() for k,v in r.items()}
 def published(tier,run,out):
  rows={}
  for name in ['panimmune','celloforigin']:
   with (ROOT/'config'/f'{name}_source_manifest.tsv').open(encoding='utf-8-sig') as f:
-   for r in csv.DictReader(f,delimiter='\t'):rows[r['filename']]=r
+   for r in csv.DictReader(f,delimiter='\t'):r=clean_row(r);rows[r['filename']]=r
  selected=[rows[n] for n in TIERS[tier]]
  write_tsv(ROOT/'config'/f'tcga_{tier}.manifest.tsv',selected,['id','filename','md5','size'])
  print(json.dumps({'tier':tier,'files':len(selected),'bytes':sum(int(r['size']) for r in selected),'download':run},indent=2))
@@ -77,7 +85,10 @@ def select_development(rows,limit,per_project=False):
  return [row for row in rows if row['patient_id'] in chosen]
 
 def discover(kind,projects,limit,run,out,per_project=False):
- dtype={'beta':'Methylation Beta Value','idat':'Raw Intensities','masked-idat':'Masked Intensities'}[kind]
+ # GDC methylation arrays are filed ONLY as 'Masked Intensities' (idat) or 'Methylation Beta Value'.
+ # There is no 'Raw Intensities' methylation data_type: that value belongs to Affymetrix SNP6 and
+ # GeneChip expression arrays, so querying it for a methylation platform always returns zero.
+ dtype={'beta':'Methylation Beta Value','idat':'Masked Intensities','masked-idat':'Masked Intensities'}[kind]
  filters={'op':'and','content':[{'op':'in','content':{'field':'cases.project.project_id','value':projects}},{'op':'in','content':{'field':'data_type','value':[dtype]}},{'op':'in','content':{'field':'platform','value':['Illumina Human Methylation 450']}},{'op':'in','content':{'field':'access','value':['open']}}]}
  payload={'filters':filters,'format':'JSON','size':1000,'from':0,'sort':'file_id:asc','fields':'file_id,file_name,md5sum,file_size,access,data_type,data_format,platform,analysis.workflow_type,cases.submitter_id,cases.project.project_id,cases.samples.submitter_id,cases.samples.sample_type'}
  hits=[]

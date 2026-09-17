@@ -28,7 +28,7 @@ def main():
     if row[key]=='Not established in reviewed material':row[key]='Absent from reviewed paper or not reported'
    rows.append(row)
  with (root/'docs/literature_evidence.csv').open('w',newline='',encoding='utf8') as f:
-  w=csv.DictWriter(f,fieldnames=FIELDS);w.writeheader();w.writerows(rows)
+  w=csv.DictWriter(f,fieldnames=FIELDS,lineterminator='\n');w.writeheader();w.writerows(rows)
  (root/'docs/literature_evidence.json').write_text(json.dumps(rows,indent=2,ensure_ascii=False),encoding='utf8')
  lines=['# Literature evidence: paper-by-paper digest','Evidence labels distinguish source claims from KIDS26 judgments. Unknown is not a negative finding. Page numbers are physical PDF pages including covers. Original CSV titles/years are retained, with discrepancies noted. This is a methods-focused first pass, not a systematic review or a complete supplementary-methods audit.']
  for row in rows:lines += [f"## {row['paper_id']} - {row['Paper']}",f"Source: {row['local_file'] or row['Link']}; {row['pages_sections']}".rstrip(),f"Status: {row['review_status']}",f"Delta category: {row['delta_category']}",f"**Documented fact:** {row['documented_fact']}",f"**Inference:** {row['inference']}",f"**Recommendation:** {row['recommendation']}"]

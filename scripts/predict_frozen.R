@@ -1,19 +1,112 @@
+# =============================================================================
+# scripts/predict_frozen.R - Apply a frozen model to new samples.
+# =============================================================================
+#
+# USAGE
+#   Rscript scripts/predict_frozen.R <model.rds> <beta.tsv> <output.tsv>
+#
+#   e.g. Rscript scripts/predict_frozen.R \
+#          results/baseline/frozen_nonCNS.rds \
+#          data/processed/locked_test_beta.tsv \
+#          results/locked_predictions.tsv
+#
+#   Run from the repository root (source("R/model.R") is a relative path).
+#
+# PURPOSE AND DISCIPLINE
+# ----------------------
+# This is the inference half of the leakage boundary. It LOADS a model that was
+# frozen by scripts/train_baseline.R and applies it unchanged. It performs no
+# fitting, no tuning, and no re-estimation of any statistic - all preprocessing
+# constants (medians, centres, scales), the coefficients, the OOD cutoff and the
+# conformal half-width travel inside the .rds bundle.
+#
+# This script is what you run ONCE against the locked CNS partition after the
+# model is frozen, and what you would run against approved external data. Every
+# additional run against the same held-out set erodes its status as a held-out
+# set, because the results inevitably inform the next decision.
+#
+# OUTPUT COLUMN GUIDE
+# -------------------
+#   predicted_reference_HRDsum  raw model output, ALWAYS populated even when QC
+#                               fails. Analysts should use this one.
+#   estimate_for_display        the same value, blanked to NA unless reportable.
+#                               Display layers (the Shiny app) should use this.
+#   lower / upper               conformal interval, NA unless reportable and a
+#                               finite calibration quantile exists.
+#   reportable                  passed QC AND inside the training distribution.
+#   warning                     why a prediction is being withheld, if it is.
+#   interval_status             whether the interval is usable at all.
+#   model_md5                   checksum of the model file, for provenance.
+#
+# KNOWN GAPS (audited 2026-09-16)
+# --------------------------------
+#   * NO PROVENANCE GATE. train_baseline.R refuses to run on an engineering-only
+#     matrix by checking the .provenance.json sidecar; this script has no such
+#     check. It will happily score a smoke fixture, or any arbitrary beta TSV,
+#     and stamp the result with a confident-looking provenance string. The
+#     output schema also happens to match exactly what app/app.R accepts via
+#     KIDS26_DEMO_RESULTS, so an unvetted table can flow straight to the demo.
+#     Add the same sidecar check that train_baseline.R performs.
+#   * HRD_high_probability is written as NA for every row. The exploratory
+#     threshold of 42 in config/analysis_protocol.json is read by no R code.
+#     Either wire it up or drop the column - an always-NA field in a
+#     clinical-looking table invites misreading.
+# =============================================================================
+
 # Rscript scripts/predict_frozen.R model.rds beta.tsv output.tsv
 args<-commandArgs(trailingOnly=TRUE);if(length(args)!=3)stop("Expected model, beta matrix, output")
 source("R/model.R");if(!requireNamespace("data.table",quietly=TRUE))stop("Install data.table")
+
+# Load the frozen bundle and the new beta matrix. Same on-disk orientation as
+# training: probes in rows, samples in columns, first column = probe_id.
 b<-readRDS(args[1]);d<-data.table::fread(args[2],data.table=FALSE,check.names=FALSE)
 if(anyDuplicated(d[[1]]))stop("Duplicate probes")
+
+# Transpose to samples-in-rows and name the columns by probe ID. The naming
+# matters: apply_preprocess() inside predict_en() aligns features BY NAME, so
+# the incoming matrix does not need the same probe order, or even the same probe
+# set, as the training matrix. Missing probes are imputed with stored training
+# medians and counted toward the per-sample missing fraction.
 x<-t(as.matrix(d[,-1,drop=FALSE]));storage.mode(x)<-"double";colnames(x)<-d[[1]]
 if(any(is.finite(x)&(x<0|x>1)))stop("Invalid beta")
+
+# Apply the frozen model. predict_en() returns the raw prediction plus the
+# missing_fraction / ood / qc_fail / reportable flags.
 p<-predict_en(b,x);q<-b$interval_q
+# A model frozen without a calibration step has no interval half-width; Inf
+# propagates to NA bounds below rather than fabricating a narrow interval.
 if(is.null(q))q<-Inf
+
+# Symmetric conformal interval around the point estimate.
 p$lower<-p$predicted_reference_HRDsum-q;p$upper<-p$predicted_reference_HRDsum+q
+
+# Be explicit that conformal coverage is marginal and assumes the new samples
+# are exchangeable with the TCGA calibration set. For pediatric or
+# different-platform data that assumption does not hold, so the guarantee does
+# not transfer - hence "no_domain_shift_guarantee".
 p$interval_status<-if(is.finite(q))"empirical_no_domain_shift_guarantee" else "unavailable_insufficient_calibration"
+
+# Human-readable reason per row. Note the ordering: qc_fail (too many missing
+# probes) takes precedence over ood (inside the assay but outside the training
+# distribution). Even a passing sample gets a warning string, because no
+# prediction from this research model is validated for a new domain.
 p$warning<-ifelse(p$qc_fail,"excessive_missing_features",ifelse(p$ood,"outside_training_distance_reference","research_prediction_unvalidated_domain"))
+
+# Two-column design, deliberate: the raw prediction is retained for analysis
+# while estimate_for_display is blanked unless the sample is reportable. Display
+# layers must read estimate_for_display, never the raw column.
 p$estimate_for_display<-ifelse(p$reportable,p$predicted_reference_HRDsum,NA_real_)
+# Bounds are withheld under the same rule, and additionally whenever the
+# calibration quantile is not finite.
 p$lower[!p$reportable|!is.finite(q)]<-NA_real_;p$upper[!p$reportable|!is.finite(q)]<-NA_real_
+
+# Placeholder column - see the KNOWN GAPS note in the header. Always NA.
 p$HRD_high_probability<-NA_real_
+
+# Provenance: record which model file produced these numbers so a result can
+# always be traced back to a specific frozen artefact.
 p$model_md5<-unname(tools::md5sum(args[1]))
 p$provenance<-"frozen_research_model;domain_validity_requires_review"
+
 dir.create(dirname(args[3]),recursive=TRUE,showWarnings=FALSE)
 write.table(p,args[3],sep="\t",row.names=FALSE,quote=FALSE)

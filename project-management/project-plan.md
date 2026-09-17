@@ -8,7 +8,7 @@ The strong result adds full adult multi-cancer transfer, a locked GBM/LGG evalua
 
 ## Tools
 
-- Python 3.10+ standard library for acquisition, checksums, sample matching, cohort QC, beta extraction, and engineering tests.
+- R 4.5.0 or Python 3.10+ standard library for acquisition, checksums, sample matching, cohort QC, beta extraction, and engineering tests.
 - R with `glmnet`, `data.table`, `jsonlite`, and `renv` for nested elastic-net training and frozen inference.
 - Bioconductor/minfi and conumee2 only if the raw-intensity/CNV gate passes.
 - Shiny as a presentation layer for approved precomputed results.
